@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+.env
+*.dbf
+*.dbt
+*.mdx
+*.ndx
+*.sqlite
+*.sqlite3
+*.log
+build/
+dist/

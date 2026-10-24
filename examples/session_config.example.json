@@ -1,0 +1,12 @@
+{
+  "session": {
+    "enabled": "auto-on-first-database-access",
+    "login_method": "BDE",
+    "login_trigger": "first_database_use",
+    "timeout_seconds": 900
+  },
+  "server": {
+    "ipc_only": true,
+    "tcp_enabled": false
+  }
+}
