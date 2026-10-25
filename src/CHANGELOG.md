@@ -1,5 +1,15 @@
 # PythonBDE Änderungsübersicht
 
+## v0.4.2 (2026-10-25)
+
+- Hilfe → Informations vor About, mit Passwortschutz und Pfaden; drei Labels aus User-Manager entfernt.
+- Statusbar rechts um „Server: Started/Stopped“ und „Logged-In: n“ erweitert.
+- Manager → Aliases: exklusiv sichtbares Dock mit horizontalem Aliasbaum-/Detail-Splitter und vertikalem Log-Splitter; New, Delete, Rename, Browse, Save Directory.
+- Persistenter Alias-Katalog (`aliases.json`) neben der users.dbf, atomar geschrieben; keine Änderung am Benutzer-DBF-Schema.
+- Server-Protokoll um `list_aliases`, `select_alias`, `release_alias` erweitert; aktive Sitzungsauswahl wird verfolgt.
+- Serverseitige Löschblockade bei verwendeten Aliassen, Admin-Hinweis (`admin_notice`), GUI-Bestätigung und `alias_removed`-Ereignisse.
+- Vorhandene Aliasdefinitionen entsprechen Verzeichnis-Registrierungen; die volle DBF-Tabellenengine bleibt geplant.
+
 ## v0.4.1 (2026-10-25)
 
 - Drei Statuslabels in das Users-/Admins-Dock verschoben; kein separates `centralWidget`/Logging-Dock, welches nach Minimieren links eine Spalte belegen könnte.

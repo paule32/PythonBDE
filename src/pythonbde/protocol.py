@@ -12,6 +12,7 @@ from .discovery import create_probe, decode, discover_existing, network_interfac
 from .settings import DISCOVERY_PORT
 
 from .auth import AuthError, UserManager, parse_time, utcnow
+from .aliases import AliasRegistry, AliasError, AliasInUse
 
 MAX_LINE = 64 * 1024
 MAX_QUEUE = 128 * 1024
@@ -27,6 +28,7 @@ class BDEServer(QObject):
     def __init__(self, users: UserManager, parent=None):
         super().__init__(parent)
         self.users = users
+        self.aliases = AliasRegistry(users.store.path)
         self.listener = QTcpServer(self)
         self.listener.newConnection.connect(self._accepted)
         self.discovery = QUdpSocket(self)
@@ -112,7 +114,8 @@ class BDEServer(QObject):
                 sessions.append({"username": state["username"],
                                  "login_time": state["login_time"],
                                  "session_id": state["session_id"],
-                                 "peer": state["peer"]})
+                                 "peer": state["peer"],
+                                 "aliases": sorted(state.get("aliases", set()))})
         return {"running": self.listener.isListening(), "ip": self.bind_ip,
                 "port": self.listener.serverPort() if self.listener.isListening() else 0,
                 "id": self.server_id, "started_at": self.started_at,
@@ -123,7 +126,7 @@ class BDEServer(QObject):
     def revoke_sessions(self, username=None):
         for state in self.clients.values():
             if username is None or state["username"] == username.casefold():
-                state.update(username=None, logged_at=0, login_time="")
+                state.update(username=None, logged_at=0, login_time="", aliases=set())
         self.status_changed.emit()
 
     def _find_session(self, session_id):
@@ -155,7 +158,7 @@ class BDEServer(QObject):
         if message:
             self.send_message(message, session_id)
         self._send(sock, {"event": "kicked", "reason": "Sitzung durch Administrator beendet"})
-        state.update(username=None, logged_at=0, login_time="")
+        state.update(username=None, logged_at=0, login_time="", aliases=set())
         # disconnectFromHost() liefert bereits gepufferte Nachrichten vor FIN aus.
         sock.disconnectFromHost()
         self.audit.emit(200, f"User kicked: {username}")
@@ -189,13 +192,80 @@ class BDEServer(QObject):
         self.audit.emit(200, f"User banned: {username}")
         self.status_changed.emit()
 
+    def active_alias_sessions(self, alias_name: str) -> list[dict]:
+        """Nur aktive Login-Sitzungen, die diesen Alias ausdrücklich gewählt haben."""
+        key = alias_name.casefold()
+        now = time.monotonic()
+        return [{"username": s["username"], "session_id": s["session_id"],
+                 "peer": s["peer"], "login_time": s["login_time"]}
+                for s in self.clients.values()
+                if s["username"] and now - s["logged_at"] <= SESSION_TTL
+                and key in s.get("aliases", ())]
+
+    def notify_alias_in_use(self, name, sessions):
+        """Audit und asynchrone Nachricht an eingeloggte Admin-Clients."""
+        self.audit.emit(400, f"Alias is in use: {name} ({len(sessions)} session(s))")
+        for sock, state in list(self.clients.items()):
+            if not state["username"]:
+                continue
+            account = self.users.get(state["username"])
+            if account and account["ADMIN"]:
+                self._send(sock, {"event": "admin_notice", "kind": "alias_in_use",
+                                  "alias": name, "session_count": len(sessions)})
+
+    def create_alias(self, name, folder):
+        result = self.aliases.create(name, folder)
+        self.note_action("Insert Alias", "", name)
+        self.audit.emit(200, f"Alias successfully created: {name}")
+        return result
+
+    def rename_alias(self, old_name, new_name):
+        sessions = self.active_alias_sessions(old_name)
+        if sessions:
+            self.notify_alias_in_use(old_name, sessions)
+            raise AliasInUse(old_name, sessions)
+        result = self.aliases.rename(old_name, new_name)
+        self.note_action("Rename Alias", "", old_name)
+        self.audit.emit(200, f"Alias successfully renamed: {old_name} -> {new_name}")
+        return result
+
+    def update_alias_path(self, name, folder):
+        sessions = self.active_alias_sessions(name)
+        if sessions:
+            self.notify_alias_in_use(name, sessions)
+            raise AliasInUse(name, sessions)
+        result = self.aliases.set_path(name, folder)
+        self.note_action("Modify Alias", "", name)
+        self.audit.emit(200, f"Alias successfully updated: {name}")
+        return result
+
+    def delete_alias(self, name, *, confirmed=False):
+        """Auch für direkte Aufrufer ist Bestätigung bei aktiver Benutzung Pflicht."""
+        sessions = self.active_alias_sessions(name)
+        if sessions and not confirmed:
+            self.notify_alias_in_use(name, sessions)
+            raise AliasInUse(name, sessions)
+        # Erst persistent löschen, danach Clients benachrichtigen. Falls der
+        # Schreibvorgang fehlschlägt, bleiben deren Reservierungen bestehen.
+        result = self.aliases.delete(name)
+        key = name.casefold()
+        for sock, state in list(self.clients.items()):
+            if key in state.get("aliases", ()):
+                state["aliases"].discard(key)
+                self._send(sock, {"event": "alias_removed", "alias": name,
+                                  "reason": "Alias durch Administrator entfernt"})
+        self.note_action("Delete Alias", "", name)
+        self.audit.emit(200, f"Alias successfully deleted: {name}")
+        self.status_changed.emit()
+        return result
+
     def _accepted(self):
         while self.listener.hasPendingConnections():
             sock = self.listener.nextPendingConnection()
             self._next_session += 1
             self.clients[sock] = {"buffer": bytearray(), "username": None, "logged_at": 0, "login_time": "",
                                   "session_id": f"session-{self._next_session}",
-                                  "peer": sock.peerAddress().toString()}
+                                  "peer": sock.peerAddress().toString(), "aliases": set()}
             sock.readyRead.connect(lambda s=sock: self._read(s))
             sock.disconnected.connect(lambda s=sock: self._gone(s))
             self.status_changed.emit()
@@ -262,10 +332,10 @@ class BDEServer(QObject):
     def _dispatch(self, state, req):
         action = req.get("action")
         if action == "ping":
-            return {"name": "PythonBDE", "version": "0.4.0", "protocol": "jsonl/1",
+            return {"name": "PythonBDE", "version": "0.4.2", "protocol": "jsonl/1",
                     "server_id": self.server_id}
         if action == "login":
-            state.update(username=None, logged_at=0, login_time="")
+            state.update(username=None, logged_at=0, login_time="", aliases=set())
             name = req.get("username", "")
             password = req.get("password", "")
             if not isinstance(name, str) or not isinstance(password, str) or len(name) > 48 or len(password) > 256:
@@ -275,26 +345,44 @@ class BDEServer(QObject):
                 self.audit.emit(400, "Login failed")
                 raise AuthError("Anmeldung fehlgeschlagen")
             state.update(username=user["USERNAME"].casefold(), logged_at=time.monotonic(),
-                         login_time=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"))
+                         login_time=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"), aliases=set())
             self.status_changed.emit()
             self.audit.emit(200, f"User logged in: {user['USERNAME']}")
             return user
         if action == "logout":
-            state.update(username=None, logged_at=0, login_time="")
+            state.update(username=None, logged_at=0, login_time="", aliases=set())
             self.status_changed.emit()
             self.audit.emit(200, "User logged out")
             return {"logged_out": True}
         name = state["username"]
         if not name or time.monotonic() - state["logged_at"] > SESSION_TTL:
-            state.update(username=None, logged_at=0, login_time="")
+            state.update(username=None, logged_at=0, login_time="", aliases=set())
             raise AuthError("Nicht angemeldet oder Sitzung abgelaufen")
         current = self.users.get(name)
         if not current or current["LOCKUSER"] or (parse_time(current["EXPIRE"]) and utcnow() > parse_time(current["EXPIRE"])):
-            state.update(username=None, logged_at=0, login_time="")
+            state.update(username=None, logged_at=0, login_time="", aliases=set())
             raise AuthError("Konto gesperrt/abgelaufen")
         if action == "whoami":
             from .auth import public_user
             return public_user(current)
+        if action == "list_aliases":
+            # Nur Namen, keine absoluten Server-Dateisystempfade ausgeben.
+            return [entry["name"] for entry in self.aliases.listing()]
+        if action == "select_alias":
+            alias = self.aliases.get(req.get("alias"))
+            if alias is None:
+                raise AliasError("Alias nicht vorhanden")
+            state.setdefault("aliases", set()).add(alias["name"].casefold())
+            self.status_changed.emit()
+            self.audit.emit(200, f"Alias selected: {alias['name']} ({state['username']})")
+            return {"alias": alias["name"], "selected": True}
+        if action == "release_alias":
+            alias_name = req.get("alias")
+            if not isinstance(alias_name, str):
+                raise AliasError("Ungültiger Aliasname")
+            state.setdefault("aliases", set()).discard(alias_name.casefold())
+            self.status_changed.emit()
+            return {"released": True}
         if action not in ("list_users", "create_user", "edit_user", "delete_user", "unlock_user"):
             raise ValueError("Unbekannte Aktion")
         if not current["ADMIN"]:

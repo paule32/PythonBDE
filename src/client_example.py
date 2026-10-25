@@ -1,7 +1,7 @@
 """Beispielclient für PythonBDE (localhost, JSON-Lines).
 
 Standardmäßig wird exakt die Antwort auf `login` angezeigt.
-Optionale Zusatzabfragen: `--ping`, `--whoami`, `--list-users`.
+Optionale Zusatzabfragen: `--ping`, `--whoami`, `--list-users`, `--list-aliases`.
 """
 import argparse
 import getpass
@@ -42,6 +42,9 @@ def main(argv=None):
     parser.add_argument("--ping", action="store_true", help="Zusätzlich Server-Ping anzeigen")
     parser.add_argument("--whoami", action="store_true", help="Benutzerdaten separat abfragen")
     parser.add_argument("--list-users", action="store_true", help="Benutzerliste abfragen (nur Admin)")
+    parser.add_argument("--list-aliases", action="store_true", help="Verfügbare Aliasnamen abfragen")
+    parser.add_argument("--select-alias", metavar="NAME", help="Alias für die Sitzung auswählen")
+    parser.add_argument("--release-alias", metavar="NAME", help="Alias-Reservierung wieder freigeben")
     parser.add_argument("--listen", action="store_true", help="Verbunden bleiben und Server-Ereignisse empfangen")
     args = parser.parse_args(argv)
 
@@ -65,6 +68,12 @@ def main(argv=None):
                     show_response("list_users", send(sock, f, "list_users"))
                 else:
                     print("Keine Administratorberechtigung für list_users")
+            if args.list_aliases:
+                show_response("list_aliases", send(sock, f, "list_aliases"))
+            if args.select_alias:
+                show_response("select_alias", send(sock, f, "select_alias", alias=args.select_alias))
+            if args.release_alias:
+                show_response("release_alias", send(sock, f, "release_alias", alias=args.release_alias))
             if args.listen:
                 print("Warte auf Servernachrichten (Strg+C beendet)...", file=sys.stderr)
                 try:

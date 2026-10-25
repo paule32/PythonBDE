@@ -21,14 +21,16 @@ LOGPANEL = next(node for node in TREE.body if isinstance(node, ast.ClassDef)
 
 
 class TestGuiStructure(unittest.TestCase):
-    def test_status_labels_live_only_in_user_manager_dock(self):
+    def test_status_labels_only_in_information_dialog_and_statusbar(self):
         def attrs(node):
             return {target.attr for assignment in ast.walk(node)
                     if isinstance(assignment, ast.Assign)
                     for target in assignment.targets if isinstance(target, ast.Attribute)}
         for label in ("server_info", "crypto_info", "paths_info"):
-            self.assertIn(label, attrs(MANAGER))
+            self.assertNotIn(label, attrs(MANAGER))
             self.assertNotIn(label, attrs(WINDOW))
+        self.assertIn("status_server", attrs(WINDOW))
+        self.assertIn("status_logins", attrs(WINDOW))
         window_source = ast.get_source_segment(SOURCE.read_text(encoding="utf8"), WINDOW)
         self.assertNotIn("setCentralWidget(", window_source)
         self.assertNotIn("self.logging_dock =", window_source)
@@ -109,12 +111,13 @@ class FakeWindow:
         self.server = FakeServer()
         self.settings = SimpleNamespace(port=43650, ip="127.0.0.1", server_id="test-id")
         self.manager_dock = SimpleNamespace(
-            server_info=FakeControl(),
             log_status=SimpleNamespace(
                 start_button=FakeControl(), stop_button=FakeControl(),
                 set_running=self._set_running))
         self.action_start = FakeControl()
         self.action_stop = FakeControl()
+        self.status_server = FakeControl()
+        self.status_logins = FakeControl()
         self._starting_server = False
         self.events = []
         self.update_status()

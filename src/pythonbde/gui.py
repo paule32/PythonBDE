@@ -22,6 +22,7 @@ from PyQt5.QtNetwork import QHostAddress, QTcpServer, QUdpSocket
 from .platform_support import operating_system, password_backend
 from .user_visuals import account_border
 from .eventlog import EventLog
+from .aliases import AliasError, AliasInUse
 
 
 class CredentialDialog(QDialog):
@@ -487,26 +488,6 @@ class UserManagerDock(QDockWidget):
         self.setWidget(content)
         layout = QVBoxLayout(content)
         layout.setContentsMargins(4, 4, 4, 4)
-        # Die drei Statuszeilen sind Teil des User-/Admin-Docks und nicht mehr
-        # Teil eines zentralen Widgets. Bei Wiederherstellen/Maximieren kann
-        # deshalb kein leeres linkes Dashboard mit eigener Mindestbreite
-        # entstehen. Insbesondere lange DBF-/Log-Pfade dürfen nicht die
-        # minimale Fensterbreite bestimmen.
-        info_box = QWidget(content)
-        info_layout = QVBoxLayout(info_box)
-        info_layout.setContentsMargins(3, 2, 3, 4)
-        info_layout.setSpacing(3)
-        self.server_info = QLabel("Server: Stopped", info_box)
-        self.crypto_info = QLabel("Passwortschutz: " + password_backend(), info_box)
-        self.paths_info = QLabel(info_box)
-        self.paths_info.setText(f"DBF: {window.users.store.path}  |  Log: {window.log.path}")
-        self.paths_info.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.paths_info.setWordWrap(True)
-        self.paths_info.setMinimumWidth(0)
-        self.paths_info.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        for status_label in (self.server_info, self.crypto_info, self.paths_info):
-            info_layout.addWidget(status_label)
-        layout.addWidget(info_box)
         actions = QHBoxLayout()
         for text, callback in (("New User", self.new_user), ("Delete Account", self.delete_user),
                                ("Unlock", self.unlock_user), ("Refresh", self.refresh)):
@@ -709,6 +690,224 @@ class UserManagerDock(QDockWidget):
             QMessageBox.warning(self, "User Management", str(err))
 
 
+class AliasesDock(QDockWidget):
+    """Alias-Katalog links, Verzeichnis-/Eigenschaften rechts und Live-Log unten."""
+    def __init__(self, window):
+        super().__init__("Aliases", window)
+        self.setObjectName("PythonBDEAliasesDock")
+        self.window = window
+        self.setAllowedAreas(Qt.AllDockWidgetAreas)
+        base = QWidget()
+        self.setWidget(base)
+        outer = QVBoxLayout(base)
+        outer.setContentsMargins(4, 4, 4, 4)
+        self.vertical = QSplitter(Qt.Vertical)
+        top = QWidget()
+        top_layout = QVBoxLayout(top)
+        top_layout.setContentsMargins(3, 3, 3, 3)
+
+        toolbar = QHBoxLayout()
+        self.new_button = QPushButton("New")
+        self.delete_button = QPushButton("Delete")
+        self.rename_button = QPushButton("Rename")
+        for button, method in ((self.new_button, self.new_alias),
+                               (self.delete_button, self.delete_alias),
+                               (self.rename_button, self.rename_alias)):
+            toolbar.addWidget(button)
+            button.clicked.connect(method)
+        toolbar.addStretch(1)
+        top_layout.addLayout(toolbar)
+
+        self.horizontal = QSplitter(Qt.Horizontal)
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabel("Aliases")
+        self.tree.currentItemChanged.connect(self.selection_changed)
+        self.horizontal.addWidget(self.tree)
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.addWidget(QLabel("Alias Properties"))
+        form = QFormLayout()
+        self.alias_name = QLineEdit()
+        self.alias_name.setReadOnly(True)
+        self.folder = QLineEdit()
+        form.addRow("Alias", self.alias_name)
+        form.addRow("Directory", self.folder)
+        right_layout.addLayout(form)
+        folder_buttons = QHBoxLayout()
+        browse = QPushButton("Browse ...")
+        save_path = QPushButton("Save Directory")
+        browse.clicked.connect(self.browse_directory)
+        save_path.clicked.connect(self.save_directory)
+        folder_buttons.addWidget(browse)
+        folder_buttons.addWidget(save_path)
+        folder_buttons.addStretch(1)
+        right_layout.addLayout(folder_buttons)
+        right_layout.addWidget(QLabel("Ausgewählter Alias wird durch den Server verwaltet."))
+        right_layout.addStretch()
+        self.horizontal.addWidget(right)
+        self.horizontal.setStretchFactor(0, 1)
+        self.horizontal.setStretchFactor(1, 3)
+        self.horizontal.setSizes([240, 660])
+        top_layout.addWidget(self.horizontal)
+        self.vertical.addWidget(top)
+
+        log_panel = QWidget()
+        log_layout = QVBoxLayout(log_panel)
+        log_layout.setContentsMargins(3, 3, 3, 3)
+        log_layout.addWidget(QLabel("Server Logging (neueste Meldung zuerst)"))
+        self.log_text = QPlainTextEdit()
+        self.log_text.setReadOnly(True)
+        self.log_text.setLineWrapMode(QPlainTextEdit.NoWrap)
+        log_layout.addWidget(self.log_text)
+        log_actions = QHBoxLayout()
+        export = QPushButton("Save As ...")
+        clear = QPushButton("Clear Text")
+        export.clicked.connect(self.save_log)
+        clear.clicked.connect(self.clear_log)
+        log_actions.addWidget(export)
+        log_actions.addWidget(clear)
+        log_actions.addStretch(1)
+        log_layout.addLayout(log_actions)
+        self.vertical.addWidget(log_panel)
+        self.vertical.setStretchFactor(0, 3)
+        self.vertical.setStretchFactor(1, 2)
+        self.vertical.setSizes([380, 220])
+        outer.addWidget(self.vertical)
+        self.window.log.callbacks.append(self._append_log)
+        self._render_log()
+        self.refresh()
+
+    def _append_log(self, line):
+        if self.isVisible():
+            self._render_log()
+
+    def _render_log(self):
+        self.log_text.setPlainText("\n".join(self.window.log.entries))
+        self.log_text.verticalScrollBar().setValue(0)
+
+    def save_log(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Save Log As", "python_bde_export.log",
+                                              "Log-Dateien (*.log *.txt);;Alle Dateien (*)")
+        if path:
+            try:
+                Path(path).write_text(self.log_text.toPlainText() + "\n", encoding="utf-8")
+            except OSError as exc:
+                QMessageBox.warning(self, "Save As", str(exc))
+
+    def clear_log(self):
+        self.window.log.clear_view()
+        for panel in self.window.log_panels:
+            panel._render_log()
+
+    def selected_alias(self):
+        node = self.tree.currentItem()
+        return node.data(0, Qt.UserRole) if node is not None else None
+
+    def refresh(self, choose=None):
+        if choose is None:
+            choose = self.selected_alias()
+        self.tree.blockSignals(True)
+        self.tree.clear()
+        selected = None
+        for item in self.window.server.aliases.listing():
+            node = QTreeWidgetItem(self.tree, [item["name"]])
+            node.setData(0, Qt.UserRole, item["name"])
+            if choose and item["name"].casefold() == choose.casefold():
+                selected = node
+        self.tree.blockSignals(False)
+        self.tree.setCurrentItem(selected)
+        if selected is None:
+            self.selection_changed(None, None)
+        self.delete_button.setEnabled(bool(selected))
+        self.rename_button.setEnabled(bool(selected))
+
+    def selection_changed(self, current, _previous):
+        name = current.data(0, Qt.UserRole) if current else None
+        item = self.window.server.aliases.get(name) if name else None
+        self.alias_name.setText(item["name"] if item else "")
+        self.folder.setText(item["path"] if item else "")
+        self.folder.setEnabled(bool(item))
+        self.delete_button.setEnabled(bool(item))
+        self.rename_button.setEnabled(bool(item))
+
+    def _error(self, operation, err):
+        self.window.record(400, f"Alias {operation} failed: {err}")
+        QMessageBox.warning(self, "Aliases", str(err))
+
+    def new_alias(self):
+        name, ok = QInputDialog.getText(self, "New Alias", "Alias name")
+        if not ok or not name.strip():
+            return
+        directory = QFileDialog.getExistingDirectory(self, "Select Alias Directory")
+        if not directory:
+            return
+        try:
+            self.window.server.create_alias(name.strip(), directory)
+            self.refresh(choose=name.strip())
+        except (OSError, ValueError) as err:
+            self._error("creation", err)
+
+    def rename_alias(self):
+        name = self.selected_alias()
+        if not name:
+            return
+        changed, ok = QInputDialog.getText(self, "Rename Alias", "New alias name", text=name)
+        if not ok or not changed.strip() or changed == name:
+            return
+        try:
+            self.window.server.rename_alias(name, changed.strip())
+            self.refresh(choose=changed.strip())
+        except (OSError, ValueError) as err:
+            self._error("rename", err)
+
+    def browse_directory(self):
+        if not self.selected_alias():
+            return
+        directory = QFileDialog.getExistingDirectory(self, "Select Alias Directory", self.folder.text())
+        if directory:
+            self.folder.setText(directory)
+
+    def save_directory(self):
+        name = self.selected_alias()
+        if not name:
+            return
+        try:
+            self.window.server.update_alias_path(name, self.folder.text())
+            self.refresh(choose=name)
+        except (OSError, ValueError) as err:
+            self._error("update", err)
+
+    def delete_alias(self):
+        name = self.selected_alias()
+        if not name:
+            return
+        if QMessageBox.question(self, "Delete Alias", f"Alias '{name}' wirklich löschen?") != QMessageBox.Yes:
+            return
+        try:
+            self.window.server.delete_alias(name)
+        except AliasInUse as err:
+            # Die Prüfung liegt zusätzlich im Server: ohne explizite
+            # Bestätigung ist das Löschen dort grundsätzlich verboten.
+            used_by = "\n".join(f"• {entry['username']} ({entry['peer']}, {entry['session_id']})"
+                                   for entry in err.sessions[:30])
+            warning = (f"Alias '{name}' wird noch von {len(err.sessions)} aktiven Sitzung(en) verwendet:\n"
+                       f"{used_by}\n\n"
+                       "Beim Löschen werden alle Alias-Reservierungen aufgehoben und betroffene "
+                       "Clients benachrichtigt. Trotzdem löschen?")
+            if QMessageBox.warning(self, "Alias wird verwendet", warning,
+                                   QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+                return
+            try:
+                self.window.server.delete_alias(name, confirmed=True)
+            except (OSError, ValueError) as e:
+                self._error("deletion", e)
+                return
+        except (OSError, ValueError) as err:
+            self._error("deletion", err)
+            return
+        self.refresh()
+
+
 class BackupDock(QDockWidget):
     """Vorbereitung für DBF-Backup. Noch keine Backup-/Restore-Aktion möglich."""
     def __init__(self, window):
@@ -753,11 +952,20 @@ class MainWindow(QMainWindow):
         self.server.status_changed.connect(self.update_status)
         self.manager_dock = None
         self.backup_dock = None
+        self.aliases_dock = None
         self.setWindowTitle(f"PythonBDE – BDE Server ({operating_system()})" + self.COPYRIGHT)
         # QMainWindow besitzt bewusst kein centralWidget: der User-Manager
         # soll die *gesamte* freie Fläche füllen. Ein verborgenes Dashboard
         # erzeugte bislang nach Minimieren/Normalisieren eine linke Spalte.
         self._init_menu()
+        # Dauerhafte Statusfelder: die kurzlebigen showMessage()-Texte bleiben
+        # im freien linken Statusbar-Bereich sichtbar.
+        self.status_server = QLabel("Server: Stopped", self)
+        self.status_logins = QLabel("Logged-In: 0", self)
+        self.status_server.setMinimumWidth(135)
+        self.status_logins.setMinimumWidth(110)
+        self.statusBar().addPermanentWidget(self.status_server)
+        self.statusBar().addPermanentWidget(self.status_logins)
         self.resize(940, 650)
         self.show_users()  # Startansicht: Labels, Accounts, Log und Status zusammen
         self.update_status()
@@ -786,8 +994,10 @@ class MainWindow(QMainWindow):
         self._menu_action(server_menu, "Settings", self.show_settings)
         manager_menu = self.menuBar().addMenu("Manager")
         self._menu_action(manager_menu, "Users", self.show_users)
+        self._menu_action(manager_menu, "Aliases", self.show_aliases)
         self._menu_action(manager_menu, "Backup", self.show_backup)
-        help_menu = self.menuBar().addMenu("Help")
+        help_menu = self.menuBar().addMenu("Hilfe")
+        self._menu_action(help_menu, "Informations", self.show_informations)
         self._menu_action(help_menu, "About ...", self.show_about)
 
     def start_server(self):
@@ -816,10 +1026,9 @@ class MainWindow(QMainWindow):
     def update_status(self):
         running = self.server.listener.isListening()
         status = self.server.status_snapshot()
-        target = f"{self.server.bind_ip}:{status['port']}" if running else "Stopped"
+        self.status_server.setText("Server: Started" if running else "Server: Stopped")
+        self.status_logins.setText(f"Logged-In: {status['login_count']}")
         if self.manager_dock is not None:
-            self.manager_dock.server_info.setText(
-                f"Server: {target} | Logged-in: {status['login_count']}")
             self.manager_dock.log_status.set_running(running or self._starting_server)
             if self._starting_server and not running:
                 self.manager_dock.log_status.stop_button.setEnabled(False)
@@ -882,6 +1091,18 @@ class MainWindow(QMainWindow):
         self.manager_dock.refresh()
         self._show_exclusive_dock(self.manager_dock)
 
+    def show_aliases(self):
+        if self.aliases_dock is None:
+            self.aliases_dock = AliasesDock(self)
+            self.log_panels.append(self.aliases_dock)
+            self.addDockWidget(Qt.TopDockWidgetArea, self.aliases_dock)
+            self.aliases_dock.hide()
+            self.aliases_dock.visibilityChanged.connect(
+                lambda visible: self._restore_after_dock(self.aliases_dock, visible))
+        self.aliases_dock.refresh()
+        self.aliases_dock._render_log()
+        self._show_exclusive_dock(self.aliases_dock)
+
     def show_backup(self):
         if self.backup_dock is None:
             self.backup_dock = BackupDock(self)
@@ -895,9 +1116,27 @@ class MainWindow(QMainWindow):
         if self.manager_dock is not None and self.manager_dock.isVisible():
             self.manager_dock.refresh()
 
+    def show_informations(self):
+        """Informationsdialog statt breitenziehender Labels im Dock."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("PythonBDE – Informations")
+        dlg.resize(620, 170)
+        layout = QVBoxLayout(dlg)
+        crypto = QLabel("Passwortschutz: " + password_backend())
+        paths = QLabel(f"DBF: {self.users.store.path}\nLog: {self.log.path}")
+        for label in (crypto, paths):
+            label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            label.setWordWrap(True)
+            layout.addWidget(label)
+        close = QDialogButtonBox(QDialogButtonBox.Close)
+        close.rejected.connect(dlg.reject)
+        close.accepted.connect(dlg.accept)
+        layout.addWidget(close)
+        dlg.exec_()
+
     def show_about(self):
         QMessageBox.about(self, "About PythonBDE",
-                          "PythonBDE v0.4.1" + self.COPYRIGHT +
+                          "PythonBDE v0.4.2" + self.COPYRIGHT +
                           "\nBDE-style server\nQt5 / Python / Windows + Linux\nPBKDF2-HMAC-SHA256")
 
     def activate_from_second_instance(self):

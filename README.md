@@ -1,8 +1,37 @@
 # PythonBDE – Qt5-BDE-Server mit DBF-Benutzerverwaltung
 
-**Version 0.4.1** · eigenständige Erweiterung zu [paule32/PythonBDE](https://github.com/paule32/PythonBDE).
+**Version 0.4.2** · eigenständige Erweiterung zu [paule32/PythonBDE](https://github.com/paule32/PythonBDE).
 Der beim Abruf verfügbare Repository-Text beschreibt das Projekt als „python based BDE server“.
 Die hier enthaltene Implementierung ist ein **neues, separates Grundmodul**; es wurde **nichts nach GitHub gepusht**.
+
+## Neuerungen v0.4.2 – Informationsdialog, Statusbar und Aliases
+
+- Das Hauptmenü **Hilfe → Informations** ist jetzt der **erste Eintrag** im Hilfe-Menü. Ein Dialog enthält ausschließlich **Passwortschutz** sowie die Pfade zu **users.dbf** und **python_bde.log**. Die bisherigen drei Statuslabels sind aus dem Users-/Admins-Dock entfernt.
+- Zwei dauerhafte Statusbar-Panels zeigen **`Server: Stopped` / `Server: Started`** sowie **`Logged-In: n`**. Die Zahl zählt verschiedene angemeldete Benutzernamen; die bestehende Server-Statusansicht zeigt darüber hinaus einzelne TCP-Sitzungen.
+- **Manager → Aliases** öffnet ein Dock, blendet andere Docks aus und stellt sie beim Schließen wieder her. Oberhalb: **New**, **Delete**, **Rename**; darunter links der Aliasbaum und rechts Aliasname/Verzeichnispfad mit Browse/Save Directory. Ein **vertikaler Splitter** trennt diesen Bereich vom unteren QPlainTextEdit-Logging (gleicher 500-Zeilen-Puffer und dieselbe 5-MiB-Datei wie der User-Manager).
+- Aliasdefinitionen werden atomar in **`aliases.json`** neben der DBF gespeichert (Linux: `0600`). Aliasnamen sind unabhängig von Groß-/Kleinschreibung eindeutig. **New** benötigt einen existierenden Ordner; **Rename** und **Save Directory** sind bei aktiver Aliasnutzung gesperrt.
+- Neue, authentisierte JSONL-Aktionen: `list_aliases`, `select_alias`, `release_alias`. `list_aliases` liefert **nur die Namen** (keine Serverpfade). `select_alias` registriert einen Alias für die konkrete TCP-Sitzung, `release_alias` hebt diese Registrierung auf; Logout, Re-Login und Verbindungsschluss beenden die Zuordnung.
+- **Löschschutz bei aktiver Verwendung:** Vor jeder Aliaslöschung überprüft der Server seine Sitzungsliste. Ohne ausdrückliche Bestätigung wirft er `AliasInUse`; die GUI listet die betroffenen Sitzungen und verlangt eine zweite, deutliche Zustimmung. Angemeldete Admin-Clients bekommen außerdem ein `admin_notice`-Ereignis. Nach bestätigtem Löschen erhalten betroffene Clients `alias_removed` und die Alias-Reservierungen werden freigegeben. Diese Prüfung erfolgt **serverseitig**, nicht nur in der GUI.
+- Die vorhandenen Kontorechte, die DBF-Benutzertabelle und die Start-/Stop-Steuerung bleiben unverändert.
+
+**Umfang:** Ein Alias ist derzeit eine **Verzeichniszuordnung und Sitzungsreservierung**, keine vollständige BDE-Tabellenengine. Allgemeines Öffnen/Ändern von DBF-Dateien über Aliase, Transaktionen, tatsächliche Datensatzsperren und Indexmanagement sind noch **nicht** implementiert. Ein Client kann den Alias auswählen, aber noch keine Tabellendatensätze darüber lesen oder ändern. Bereits außerhalb dieses Servers geöffnete DBF-Dateien werden durch die neue Sitzungsprüfung nicht erkannt. Für einen produktiven LAN-Einsatz ist das bestehende unverschlüsselte JSONL-Protokoll weiterhin nur über TLS/VPN geeignet.
+
+Beispiele nach Anmeldung (eine JSON-Zeile pro Aktion):
+
+```json
+{"action":"list_aliases"}
+{"action":"select_alias","alias":"Archiv"}
+{"action":"release_alias","alias":"Archiv"}
+```
+
+Beispielclient:
+
+```bash
+python client_example.py --list-aliases
+python client_example.py --select-alias Archiv --listen
+```
+
+**Prüfstand:** Automatisierte Tests auf Linux (ohne native Qt5-GUI). Die echte Qt5-Ansicht und ihre Splitter/Buttons müssen auf Windows/Linux noch visuell getestet werden.
 
 ## Neuerungen v0.4.1 – Statuslabels im User-Manager, Server-Startbutton
 
@@ -20,7 +49,7 @@ Die Startgröße beträgt **940 × 650 Pixel**; das Hauptfenster bleibt in beide
 
 ### Fenster und Splitter
 
-- Seit v0.4.1 sind `Server`, `Passwortschutz` und die Pfade für `users.dbf` und `python_bde.log` **im Users-/Admins-Dock** untergebracht; das frühere separate Dashboard und Logging-Dock entfallen.
+- Ab v0.4.2 stehen `Server` und `Logged-In` **in der Statusbar**; Passwortschutz und DBF-/Log-Pfade werden über **Hilfe → Informations** angezeigt. Ein separates Dashboard und Logging-Dock gibt es weiterhin nicht.
 - Unter **Manager → Users** ersetzt das neue Benutzer-Dock die bisherige einfache Zweispaltenansicht durch einen **vertikalen Splitter**: oben das horizontal gesplittete Benutzerbaum-/Eigenschaftenpanel, unten die protokollierte Live-Aktivität und Serverstatus.
 - Im unteren Bereich gibt es einen zweiten **vertikalen Splitter** zwischen dem QPlainTextEdit-Logging (mit **Save As ...** / **Clear Text**) und den aktiven Verbindungen (mit **Send Message To All**, **Kick All with Message**, **Stop Server**).
 - Das Menü **Server → Status** navigiert in das eingebettete Statuspanel anstelle eines neuen Dialogs.
