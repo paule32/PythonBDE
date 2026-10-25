@@ -13,3 +13,4 @@ venv/
 *.log
 build/
 dist/
+/tmp
