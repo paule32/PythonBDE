@@ -305,7 +305,7 @@ class LogStatusPanel(QWidget):
         self.info.setTextInteractionFlags(Qt.TextSelectableByMouse)
         status_layout.addWidget(self.info)
         self.sessions = QTreeWidget()
-        self.sessions.setHeaderLabels(["Logged-in User", "Login Time (UTC)"])
+        self.sessions.setHeaderLabels(["Logged-in User", "Login Time (UTC)", "RPC Status", "LastErrorCode"])
         self.sessions.setColumnWidth(0, 210)
         self.sessions.setContextMenuPolicy(Qt.CustomContextMenu)
         self.sessions.customContextMenuRequested.connect(self.session_menu)
@@ -377,7 +377,9 @@ class LogStatusPanel(QWidget):
         self.sessions.clear()
         selected = None
         for session in status["sessions"]:
-            node = QTreeWidgetItem(self.sessions, [session["username"], session["login_time"]])
+            node = QTreeWidgetItem(self.sessions, [session["username"], session["login_time"],
+                                                   session.get("rpc", "idle"),
+                                                   str(session["rpc_error_code"]) if session.get("rpc_error_code") is not None else "-"])
             node.setData(0, Qt.UserRole, session["session_id"])
             node.setToolTip(0, session.get("peer", ""))
             if session["session_id"] == selected_id:
@@ -1172,7 +1174,7 @@ class MainWindow(QMainWindow):
 
     def show_about(self):
         QMessageBox.about(self, "About PythonBDE",
-                          "PythonBDE v0.4.3" + self.COPYRIGHT +
+                          "PythonBDE v0.4.4" + self.COPYRIGHT +
                           "\nBDE-style server\nQt5 / Python / Windows + Linux\nPBKDF2-HMAC-SHA256")
 
     def activate_from_second_instance(self):

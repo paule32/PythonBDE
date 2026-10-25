@@ -1,5 +1,15 @@
 # PythonBDE Änderungsübersicht
 
+## v0.4.4 (2026-10-25)
+
+- Bidirektionaler RPC über bestehende JSON-Lines-Verbindung: nach Login `rpc_request` mit `CreateWindow`.
+- Sitzungsgebundene Rückmeldung `rpc_result` mit `client`, `rpcId`, `lastErrorCode`; 0=Erfolg, >0=Fehler.
+- Replay-/Routing-Prüfung und 15-Sekunden-Timeout für nicht bestätigte RPCs.
+- Neuer Qt5-GUI-Testclient (`rpc_client.py`) erstellt ein sichtbares Fenster und bestätigt danach den Server.
+- RPC-Status und Fehlercode pro eingeloggter Sitzung in der Serverstatus-Ansicht.
+- Testclient-Startskripte für Windows und Linux; Benutzer-/Alias-DBF-Schema unverändert.
+
+
 ## v0.4.3 (2026-10-25)
 
 - Hauptmenü `Hilfe` in `Help` umbenannt; `Informations` und `About ...` beibehalten.

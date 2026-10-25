@@ -1,8 +1,96 @@
 # PythonBDE – Qt5-BDE-Server mit DBF-Benutzerverwaltung
 
-**Version 0.4.3** · eigenständige Erweiterung zu [paule32/PythonBDE](https://github.com/paule32/PythonBDE).
+**Version 0.4.4** · eigenständige Erweiterung zu [paule32/PythonBDE](https://github.com/paule32/PythonBDE).
 Der beim Abruf verfügbare Repository-Text beschreibt das Projekt als „python based BDE server“.
 Die hier enthaltene Implementierung ist ein **neues, separates Grundmodul**; es wurde **nichts nach GitHub gepusht**.
+
+## Neuerungen v0.4.4 – bidirektionales JSONL-RPC (CreateWindow)
+
+Der bestehende TCP-Server kann jetzt **nach erfolgreichem Login** ein RPC-Kommando
+an den **angemeldeten Qt5-Testclient** schicken. **Dies ist der erste
+funktionale Server→Client-Aufruf**, noch keine allgemeine BDE-RPC-Engine.
+
+Der Client benötigt vorab ein laufendes `rpc_client.py` auf dem Clientrechner.
+Der Server startet **keine ausführbaren Dateien auf einem anderen Rechner**;
+stattdessen verbindet sich die Client-App selbst mit dem Server und erstellt
+auf Anfrage des Servers ein neues Qt5-Fenster.
+
+### Funktionstest auf einem Rechner (Windows/Linux)
+
+1. Serverseitig: `python server.py` starten, in der GUI mit **Start Server**
+   den Listener auf `127.0.0.1:43650` aktivieren (vorher ggf. einen User anlegen).
+2. In einer **zweiten Konsole**: `python rpc_client.py --host 127.0.0.1 --port 43650`
+   starten oder `start_rpc_client_windows.bat` / `start_rpc_client_linux.sh` verwenden.
+3. Username und Passwort im Qt5-Testclient eingeben, **Connect / Login** drücken.
+4. Bei erfolgreicher Anmeldung erscheint ein **separates Qt5-Fenster**
+   „PythonBDE – RPC CreateWindow“.
+5. Im Client-Log steht `CreateWindow successful; lastErrorCode=0`,
+   auf dem Server erscheint ein Audit-Eintrag `RPC CreateWindow OK`.
+6. Im Server-Statuspanel zeigen die Sitzungen die Spalten **RPC Status** und
+   **LastErrorCode** an (pending / success / error / timeout).
+
+### JSONL-Nachrichten (jede Nachricht ist eine UTF-8-Zeile)
+
+Client → Server, wie bisher:
+
+```json
+{"action":"login","username":"gast","password":"<EINGABE>"}
+```
+
+Server → Client, zuerst die gewöhnliche Login-Bestätigung:
+
+```json
+{"ok":true,"data":{"USERNAME":"gast"}}
+```
+
+Das `data`-Objekt ist hier **verkürzt dargestellt**; in der Anwendung
+enthält es die bisherige freigegebene Benutzeransicht.
+
+Dann sendet der Server **über dieselbe angemeldete TCP-Verbindung**:
+
+```json
+{"event":"rpc_request","client":"session-1","clientIp":"127.0.0.1","lastErrorCode":0,"setFunc":"CreateWindow","rpcId":"<zufaellige-id>"}
+```
+
+Der Client erstellt ein tatsächliches Qt5-Fenster, überprüft die Sichtbarkeit
+und bestätigt **Client → Server**:
+
+```json
+{"action":"rpc_result","client":"session-1","rpcId":"<dieselbe-id>","lastErrorCode":0}
+```
+
+Bei einem Problem liefert er einen positiven Wert und optional `errorText`:
+
+```json
+{"action":"rpc_result","client":"session-1","rpcId":"<dieselbe-id>","lastErrorCode":1002,"errorText":"Window creation failed"}
+```
+
+Der Server antwortet auf die Quittung:
+
+```json
+{"ok":true,"data":{"rpc_ack":true,"client":"session-1","lastErrorCode":0}}
+```
+
+**Bedeutung:** `lastErrorCode=0` = Erfolg; Werte größer als null = Fehler.
+`client` bezeichnet die **TCP-Sitzungs-ID** (nicht nur die IP), damit zwei
+Clients hinter derselben IP unterscheidbar bleiben. `rpcId` korreliert genau
+eine Anforderung mit der Rückmeldung. Der Server akzeptiert die Rückmeldung
+**nur von der zugehörigen authentisierten Verbindung**; alte, fremde, doppelte
+oder zeitlich abgelaufene Quittungen werden zurückgewiesen.
+
+Die Antwort muss binnen **15 Sekunden** eintreffen; ansonsten protokolliert
+der Server einen Timeout. Ein bereits angemeldeter Altclient, der das
+`rpc_request`-Ereignis ignoriert, erhält dadurch keinen Fehler beim Login,
+aber erzeugt keine GUI und keine erfolgreiche RPC-Bestätigung.
+
+**Sicherheit:** Serverfunktionen sind derzeit fest auf `CreateWindow`
+begrenzt; es gibt **kein** JSON-gesteuertes Ausführen von Code, Programmen
+oder Shell-Kommandos. Für LAN-Betrieb weiterhin **TLS-Proxy oder VPN**
+verwenden, da das bisherige TCP-Login noch unverschlüsselt übertragen wird.
+
+**Tests:** Protokoll- und Ablauf-Unit-Tests können ohne Qt5 ausgeführt werden.
+Die native PyQt5-Clientoberfläche und ein vollständiger TCP-Roundtrip müssen
+auf einem Rechner mit installiertem Qt5 geprüft werden.
 
 ## Neuerungen v0.4.3 – Toolbar mit Light-/Dark-Umschaltung
 

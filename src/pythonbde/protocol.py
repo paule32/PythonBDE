@@ -13,6 +13,7 @@ from .settings import DISCOVERY_PORT
 
 from .auth import AuthError, UserManager, parse_time, utcnow
 from .aliases import AliasRegistry, AliasError, AliasInUse
+from .rpc import RPC_TIMEOUT_SECONDS, create_window_request, validate_result
 
 MAX_LINE = 64 * 1024
 MAX_QUEUE = 128 * 1024
@@ -40,6 +41,7 @@ class BDEServer(QObject):
         self.started_at = ""
         self.instance_id = str(uuid.uuid4())
         self._next_session = 0
+        self._rpc_timeout_ms = RPC_TIMEOUT_SECONDS * 1000
 
     def start(self, port: int = 43650, ip: str = "127.0.0.1", *, server_id: str = ""):
         if self.listener.isListening():
@@ -115,7 +117,9 @@ class BDEServer(QObject):
                                  "login_time": state["login_time"],
                                  "session_id": state["session_id"],
                                  "peer": state["peer"],
-                                 "aliases": sorted(state.get("aliases", set()))})
+                                 "aliases": sorted(state.get("aliases", set())),
+                                 "rpc": state.get("rpc_status", "idle"),
+                                 "rpc_error_code": state.get("rpc_error_code", None)})
         return {"running": self.listener.isListening(), "ip": self.bind_ip,
                 "port": self.listener.serverPort() if self.listener.isListening() else 0,
                 "id": self.server_id, "started_at": self.started_at,
@@ -126,7 +130,7 @@ class BDEServer(QObject):
     def revoke_sessions(self, username=None):
         for state in self.clients.values():
             if username is None or state["username"] == username.casefold():
-                state.update(username=None, logged_at=0, login_time="", aliases=set())
+                state.update(username=None, logged_at=0, login_time="", aliases=set(), rpc_pending=None)
         self.status_changed.emit()
 
     def _find_session(self, session_id):
@@ -265,7 +269,8 @@ class BDEServer(QObject):
             self._next_session += 1
             self.clients[sock] = {"buffer": bytearray(), "username": None, "logged_at": 0, "login_time": "",
                                   "session_id": f"session-{self._next_session}",
-                                  "peer": sock.peerAddress().toString(), "aliases": set()}
+                                  "peer": sock.peerAddress().toString(), "aliases": set(),
+                                  "rpc_pending": None, "rpc_status": "idle", "rpc_error_code": None}
             sock.readyRead.connect(lambda s=sock: self._read(s))
             sock.disconnected.connect(lambda s=sock: self._gone(s))
             self.status_changed.emit()
@@ -280,6 +285,47 @@ class BDEServer(QObject):
             return
         encoded = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n"
         sock.write(encoded)
+
+    def _request_client_window(self, sock, state):
+        """Send one CreateWindow command following a successful login.
+
+        A new login clears any old pending command. Responses are strictly
+        correlated to both the TCP session and rpcId.
+        """
+        request = create_window_request(state["session_id"], state["peer"])
+        state["rpc_pending"] = request
+        state["rpc_status"] = "pending"
+        state["rpc_error_code"] = None
+        self._send(sock, request)
+        self.audit.emit(200, f"RPC CreateWindow sent: {request['client']}")
+        self.status_changed.emit()
+        QTimer.singleShot(self._rpc_timeout_ms, lambda s=sock, rid=request["rpcId"]: self._rpc_timeout(s, rid))
+
+    def _rpc_timeout(self, sock, rpc_id):
+        state = self.clients.get(sock)
+        if not state:
+            return
+        pending = state.get("rpc_pending")
+        if not pending or pending["rpcId"] != rpc_id:
+            return
+        state["rpc_pending"] = None
+        state["rpc_status"] = "timeout"
+        state["rpc_error_code"] = None
+        self.audit.emit(400, f"RPC CreateWindow timeout: {state['session_id']}")
+        self.status_changed.emit()
+
+    def _receive_rpc_result(self, state, req):
+        pending = state.get("rpc_pending")
+        code, details = validate_result(req, pending, state["session_id"])
+        state["rpc_pending"] = None
+        state["rpc_error_code"] = code
+        state["rpc_status"] = "success" if code == 0 else "error"
+        message = f"RPC CreateWindow {'OK' if code == 0 else 'failed'}: {state['session_id']} (code={code})"
+        if details:
+            message += f" ({details})"
+        self.audit.emit(200 if code == 0 else 400, message)
+        self.status_changed.emit()
+        return {"rpc_ack": True, "client": state["session_id"], "lastErrorCode": code}
 
     def _read(self, sock):
         state = self.clients.get(sock)
@@ -317,6 +363,14 @@ class BDEServer(QObject):
                     raise ValueError("JSON-Objekt erwartet")
                 result = self._dispatch(state, req)
                 self._send(sock, {"ok": True, "data": result})
+                # First the ordinary login response, THEN an asynchronous RPC.
+                # This avoids mixing the original login reply with a GUI request.
+                if req.get("action") == "login" and state.get("username"):
+                    try:
+                        self._request_client_window(sock, state)
+                    except Exception:
+                        # RPC delivery must NEVER produce a second login reply.
+                        self.audit.emit(400, f"RPC CreateWindow dispatch failed: {state['session_id']}")
             except (ValueError, TypeError, KeyError, AuthError) as e:
                 self._send(sock, {"ok": False, "error": str(e)})
                 if isinstance(req, dict) and req.get("action") in (
@@ -332,7 +386,7 @@ class BDEServer(QObject):
     def _dispatch(self, state, req):
         action = req.get("action")
         if action == "ping":
-            return {"name": "PythonBDE", "version": "0.4.2", "protocol": "jsonl/1",
+            return {"name": "PythonBDE", "version": "0.4.4", "protocol": "jsonl/1",
                     "server_id": self.server_id}
         if action == "login":
             state.update(username=None, logged_at=0, login_time="", aliases=set())
@@ -345,12 +399,13 @@ class BDEServer(QObject):
                 self.audit.emit(400, "Login failed")
                 raise AuthError("Anmeldung fehlgeschlagen")
             state.update(username=user["USERNAME"].casefold(), logged_at=time.monotonic(),
-                         login_time=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"), aliases=set())
+                         login_time=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"), aliases=set(),
+                         rpc_pending=None, rpc_status="idle", rpc_error_code=None)
             self.status_changed.emit()
             self.audit.emit(200, f"User logged in: {user['USERNAME']}")
             return user
         if action == "logout":
-            state.update(username=None, logged_at=0, login_time="", aliases=set())
+            state.update(username=None, logged_at=0, login_time="", aliases=set(), rpc_pending=None)
             self.status_changed.emit()
             self.audit.emit(200, "User logged out")
             return {"logged_out": True}
@@ -362,6 +417,8 @@ class BDEServer(QObject):
         if not current or current["LOCKUSER"] or (parse_time(current["EXPIRE"]) and utcnow() > parse_time(current["EXPIRE"])):
             state.update(username=None, logged_at=0, login_time="", aliases=set())
             raise AuthError("Konto gesperrt/abgelaufen")
+        if action == "rpc_result":
+            return self._receive_rpc_result(state, req)
         if action == "whoami":
             from .auth import public_user
             return public_user(current)
