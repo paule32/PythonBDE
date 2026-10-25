@@ -5,14 +5,14 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from PyQt5.QtCore import QDateTime, Qt, QTimer
+from PyQt5.QtCore import QDateTime, Qt, QTimer, QSize
 from PyQt5.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QDateTimeEdit, QDialog, QDialogButtonBox,
     QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
     QLineEdit, QMainWindow, QMessageBox, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget, QDockWidget, QTreeWidget, QTreeWidgetItem, QSplitter,
     QScrollArea, QComboBox, QDialogButtonBox, QTextEdit, QAction, QFrame,
-    QPlainTextEdit, QFileDialog, QMenu, QStyle, QSizePolicy
+    QPlainTextEdit, QFileDialog, QMenu, QStyle, QSizePolicy, QToolBar
 )
 from .auth import AuthError, RIGHTS, UserManager, parse_time, timestamp
 from .protocol import BDEServer
@@ -23,6 +23,7 @@ from .platform_support import operating_system, password_backend
 from .user_visuals import account_border
 from .eventlog import EventLog
 from .aliases import AliasError, AliasInUse
+from .theme import apply_application_theme, theme_icon
 
 
 class CredentialDialog(QDialog):
@@ -958,6 +959,7 @@ class MainWindow(QMainWindow):
         # soll die *gesamte* freie Fläche füllen. Ein verborgenes Dashboard
         # erzeugte bislang nach Minimieren/Normalisieren eine linke Spalte.
         self._init_menu()
+        self._init_theme_toolbar()
         # Dauerhafte Statusfelder: die kurzlebigen showMessage()-Texte bleiben
         # im freien linken Statusbar-Bereich sichtbar.
         self.status_server = QLabel("Server: Stopped", self)
@@ -969,6 +971,7 @@ class MainWindow(QMainWindow):
         self.resize(940, 650)
         self.show_users()  # Startansicht: Labels, Accounts, Log und Status zusammen
         self.update_status()
+        self.apply_theme(False)  # Start im Light-Mode: Mond in der ToolBar
         self.record(200, "GUI started")
 
     def record(self, code, message):
@@ -996,9 +999,42 @@ class MainWindow(QMainWindow):
         self._menu_action(manager_menu, "Users", self.show_users)
         self._menu_action(manager_menu, "Aliases", self.show_aliases)
         self._menu_action(manager_menu, "Backup", self.show_backup)
-        help_menu = self.menuBar().addMenu("Hilfe")
+        help_menu = self.menuBar().addMenu("Help")
         self._menu_action(help_menu, "Informations", self.show_informations)
         self._menu_action(help_menu, "About ...", self.show_about)
+
+    def _init_theme_toolbar(self):
+        """Genau ein Umschaltbutton: Mond=Light, Sonne=Dark."""
+        self._dark_theme = False
+        self.theme_toolbar = QToolBar("Appearance", self)
+        self.theme_toolbar.setObjectName("PythonBDEAppearanceToolBar")
+        self.theme_toolbar.setMovable(False)
+        self.theme_toolbar.setFloatable(False)
+        self.theme_toolbar.setIconSize(QSize(26, 26))
+        self.theme_toolbar.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        self.addToolBar(Qt.TopToolBarArea, self.theme_toolbar)
+        self.action_theme = QAction(self)
+        self.action_theme.setObjectName("PythonBDEThemeToggle")
+        self.action_theme.triggered.connect(self.toggle_theme)
+        self.theme_toolbar.addAction(self.action_theme)
+
+    def apply_theme(self, dark: bool):
+        """Den Light/Dark-Style global setzen und das angezeigte Icon tauschen."""
+        self._dark_theme = bool(dark)
+        apply_application_theme(self._dark_theme)
+        # Ein globaler QSS-Wechsel darf den lokalen 3px-Kontorahmen
+        # (rot/grün/gelb) nicht überdecken oder bis zum Timer verzögern.
+        if self.manager_dock is not None:
+            self.manager_dock._last_account_border = None
+            self.manager_dock.update_account_border()
+        self.action_theme.setIcon(theme_icon(self._dark_theme))
+        target = "light" if self._dark_theme else "dark"
+        self.action_theme.setText(f"Switch to {target} mode")
+        self.action_theme.setToolTip(f"Switch to {target} mode")
+        self.action_theme.setStatusTip(f"Switch to {target} mode")
+
+    def toggle_theme(self):
+        self.apply_theme(not self._dark_theme)
 
     def start_server(self):
         # Doppelte Klicks, Tastatur-Shortcuts und direkte Methodenaufrufe
@@ -1136,7 +1172,7 @@ class MainWindow(QMainWindow):
 
     def show_about(self):
         QMessageBox.about(self, "About PythonBDE",
-                          "PythonBDE v0.4.2" + self.COPYRIGHT +
+                          "PythonBDE v0.4.3" + self.COPYRIGHT +
                           "\nBDE-style server\nQt5 / Python / Windows + Linux\nPBKDF2-HMAC-SHA256")
 
     def activate_from_second_instance(self):

@@ -1,5 +1,14 @@
 # PythonBDE Änderungsübersicht
 
+## v0.4.3 (2026-10-25)
+
+- Hauptmenü `Hilfe` in `Help` umbenannt; `Informations` und `About ...` beibehalten.
+- Neue `Appearance`-ToolBar (ein Icon-Button): Light zeigt Mond, Dark zeigt Sonne; ein Klick tauscht Theme und Symbol.
+- Einheitliche Qt5-Fusion-Palette plus globales QSS für Fenster, Docks, Dialoge, Menüs, Editor-/Baumansichten und Statusleiste.
+- Navyblaue Scrollbars mit gelben Pfeilen (4 kleine PNG-Ressourcen in `pythonbde/assets`), senkrecht und waagerecht.
+- Bestehende rot/grün/gelbe 3px-Account-Rahmen nach Themewechsel sofort nachgezogen.
+- 66 automatisierte Tests bestanden; native Qt5-Anzeige noch visuell zu prüfen.
+
 ## v0.4.2 (2026-10-25)
 
 - Hilfe → Informations vor About, mit Passwortschutz und Pfaden; drei Labels aus User-Manager entfernt.
