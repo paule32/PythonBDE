@@ -13,11 +13,15 @@ ERR_CREATE_WINDOW = 1002
 ERR_WINDOW_NOT_VISIBLE = 1003
 
 
-def create_window_request(client: str, client_ip: str = "") -> dict:
+def create_window_request(client: str, client_ip: str = "", *, system_mode: str = "winXP", display=None) -> dict:
     """Create a single server->client request and a cryptographically random ID."""
     if not isinstance(client, str) or not client:
         raise ValueError("Client-ID fehlt")
+    from .emulation import validate_client_display
+    system_mode, display = validate_client_display(system_mode, display)
     return {
+        "systemMode": system_mode,
+        "display": display,
         "event": "rpc_request",
         "client": client,
         "lastErrorCode": 0,

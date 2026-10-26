@@ -154,6 +154,43 @@ class TestServerRpc(unittest.TestCase):
         self.assertEqual('pending', self.server.clients[self.sock]['rpc_status'])
         self.assertEqual(RPC_TIMEOUT_SECONDS * 1000, FakeTimer.callbacks[0][0])
 
+    def test_win95_session_mode_reaches_rpc_request(self):
+        display = {"unit": "pixels", "width": 800, "height": 600}
+        packets = self.server._request(self.sock, {"action":"login", "username":"user",
+                                                 "password":"good", "systemMode":"win95",
+                                                 "display":display})
+        self.assertEqual(2, len(packets))
+        self.assertEqual('win95', packets[0]['data']['systemMode'])
+        self.assertEqual(display, packets[0]['data']['display'])
+        self.assertEqual('win95', packets[1]['systemMode'])
+        self.assertEqual(display, packets[1]['display'])
+        self.assertEqual('win95', self.server.clients[self.sock]['system_mode'])
+
+    def test_console_mode_eighty_by_fifty_reaches_rpc(self):
+        display={"unit":"cells", "width":80, "height":50}
+        packets = self.server._request(self.sock, {"action":"login", "username":"user",
+                                                 "password":"good", "systemMode":"con",
+                                                 "display":display})
+        self.assertEqual(2, len(packets))
+        self.assertEqual('con', packets[1]['systemMode'])
+        self.assertEqual(display, packets[1]['display'])
+        self.assertEqual('con', self.server.clients[self.sock]['system_mode'])
+
+    def test_invalid_mode_rejected_without_login_and_rpc(self):
+        packets = self.server._request(self.sock, {"action":"login", "username":"user",
+                                                 "password":"good", "systemMode":"win98"})
+        self.assertEqual(1, len(packets))
+        self.assertFalse(packets[0]['ok'])
+        self.assertIsNone(self.server.clients[self.sock]['username'])
+        self.assertEqual([], FakeTimer.callbacks)
+
+    def test_console_with_pixel_size_rejected(self):
+        packets = self.server._request(self.sock, {"action":"login", "username":"user",
+                                                 "password":"good", "systemMode":"con",
+                                                 "display":{"unit":"pixels","width":80,"height":25}})
+        self.assertEqual(1, len(packets))
+        self.assertFalse(packets[0]['ok'])
+
     def test_rpc_dispatch_error_cannot_generate_duplicate_login_reply(self):
         def fail_rpc(sock, state):
             raise RuntimeError("simulated RPC transport failure")
@@ -266,27 +303,22 @@ CLIENT_METHODS = [n for n in CLIENT_CLASS.body if isinstance(n, ast.FunctionDef)
 
 
 class FakeWindow:
-    windows = []
-    fail_creation = False
-    show_visible = True
+    """Existing communication window created after login, before RPC event."""
+    def __init__(self):
+        self.visible = True
+        self.requests = []
+        self.fail = False
 
-    def __init__(self, client_id, server_name):
-        if self.fail_creation:
-            raise RuntimeError('Window creation failed')
-        self.client_id = client_id
-        self.server_name = server_name
-        self.visible = False
-        self.closed = types.SimpleNamespace(connect=lambda func: None)
-        self.windows.append(self)
-
-    def show(self):
-        self.visible = self.show_visible
+    def set_rpc(self, request):
+        if self.fail:
+            raise RuntimeError("Simulated RPC widget failure")
+        self.requests.append(request)
 
     def isVisible(self):
         return self.visible
 
 
-CLIENT_NS = {'CreatedWindow': FakeWindow, 'QTimer': FakeTimer,
+CLIENT_NS = {'QTimer': FakeTimer,
              'ERR_UNKNOWN_FUNCTION': ERR_UNKNOWN_FUNCTION,
              'ERR_CREATE_WINDOW': 1002,
              'ERR_WINDOW_NOT_VISIBLE': 1003,
@@ -302,8 +334,8 @@ class FakeRpcClient:
 
     def __init__(self):
         self._logged_in = True
-        self._server_name = '127.0.0.1:43650'
-        self._rpc_windows = {}
+        self._client_window = FakeWindow()
+        self._handled_rpc_ids = set()
         self.sent = []
         self.logs = []
 
@@ -311,52 +343,61 @@ class FakeRpcClient:
         self.sent.append({'action': action, **args})
         return True
 
-    def _log(self, text):
-        self.logs.append(text)
+    def _log(self, text, code=200):
+        self.logs.append((code, text))
 
 
 class TestQtRpcCallbacks(unittest.TestCase):
     def setUp(self):
-        FakeWindow.windows.clear()
-        FakeWindow.fail_creation = False
-        FakeWindow.show_visible = True
         FakeTimer.callbacks.clear()
         self.client = FakeRpcClient()
         self.request = create_window_request('session-1')
 
-    def test_create_window_and_ack_success(self):
+    def test_create_window_rpc_dispatched_into_existing_window(self):
+        win = self.client._client_window
         self.client._handle_rpc(self.request)
-        self.assertEqual(1, len(FakeWindow.windows))
-        self.assertEqual('session-1', FakeWindow.windows[0].client_id)
+        self.assertIs(win, self.client._client_window)
+        self.assertEqual([self.request], win.requests)
         self.assertEqual([], self.client.sent)
         FakeTimer.callbacks[0][1]()
         self.assertEqual(0, self.client.sent[0]['lastErrorCode'])
         self.assertEqual(self.request['rpcId'], self.client.sent[0]['rpcId'])
 
     def test_cannot_show_window_returns_error(self):
-        FakeWindow.show_visible = False
+        self.client._client_window.visible = False
         self.client._handle_rpc(self.request)
         FakeTimer.callbacks[0][1]()
         self.assertEqual(1003, self.client.sent[0]['lastErrorCode'])
 
-    def test_constructor_failure_returns_error(self):
-        FakeWindow.fail_creation = True
+    def test_dispatch_failure_returns_error(self):
+        self.client._client_window.fail = True
         self.client._handle_rpc(self.request)
         self.assertEqual(1002, self.client.sent[0]['lastErrorCode'])
-        self.assertEqual([], FakeWindow.windows)
+        self.assertEqual([], self.client._client_window.requests)
 
     def test_unknown_rpc_name_is_never_executed(self):
         self.client._handle_rpc({**self.request, 'setFunc': 'RunShell'})
         self.assertEqual(1001, self.client.sent[0]['lastErrorCode'])
-        self.assertEqual([], FakeWindow.windows)
+        self.assertEqual([], self.client._client_window.requests)
 
     def test_not_logged_in_client_does_not_execute(self):
         self.client._logged_in = False
         self.client._handle_rpc(self.request)
-        self.assertEqual([], FakeWindow.windows)
+        self.assertEqual([], self.client._client_window.requests)
         self.assertEqual([], self.client.sent)
 
     def test_bad_packet_missing_rpc_id_is_ignored(self):
         self.client._handle_rpc({**self.request, 'rpcId': None})
-        self.assertEqual([], FakeWindow.windows)
+        self.assertEqual([], self.client._client_window.requests)
         self.assertEqual([], self.client.sent)
+
+    def test_missing_client_window_reports_error(self):
+        self.client._client_window = None
+        self.client._handle_rpc(self.request)
+        self.assertEqual(1002, self.client.sent[0]['lastErrorCode'])
+
+    def test_duplicate_rpc_id_is_not_reprocessed(self):
+        self.client._handle_rpc(self.request)
+        self.client._handle_rpc(self.request)
+        self.assertEqual(1, len(self.client._client_window.requests))
+        self.assertEqual(1002, self.client.sent[0]['lastErrorCode'])

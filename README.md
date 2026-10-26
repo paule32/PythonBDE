@@ -1,8 +1,462 @@
 # PythonBDE – Qt5-BDE-Server mit DBF-Benutzerverwaltung
 
-**Version 0.4.4** · eigenständige Erweiterung zu [paule32/PythonBDE](https://github.com/paule32/PythonBDE).
+**Version 0.5.3** · eigenständige Erweiterung zu [paule32/PythonBDE](https://github.com/paule32/PythonBDE).
 Der beim Abruf verfügbare Repository-Text beschreibt das Projekt als „python based BDE server“.
 Die hier enthaltene Implementierung ist ein **neues, separates Grundmodul**; es wurde **nichts nach GitHub gepusht**.
+
+## Neuerungen v0.5.2 – klassischer Windows-95-Desktop
+
+- Beim Systemmodus `win95` besitzt das gesamte Client-Arbeitsfenster den originalen
+  Windows-95-Desktopfarbton **Teal / Petrolgrün `#008080` (RGB 0,128,128)**.
+- Die graue Windows-95-Taskleiste (`#C0C0C0`) und das Startmenü bleiben erhalten
+  und werden weiterhin über der Desktopfläche angezeigt.
+- `winXP` und `con` behalten unverändert ihre bisherige Darstellung.
+- Ein Light-/Dark-Themewechsel des RPC-Clients überschreibt den Windows-95-Desktop nicht.
+- Keine Änderung am Server, an den JSON-Menüs, an Benutzerdateien oder am RPC-Protokoll.
+
+## Neuerungen v0.5.1 – JSON-Startmenü und Taskleisten-Interaktion
+
+**Server:** Nach erfolgreichem Login und anschließendem `CreateWindow` sendet
+PythonBDE für die Modi `win95` und `winXP` pro TCP-Sitzung ein zusätzliches
+JSONL-Ereignis `menu_config`. Es enthält `menuVersion=1`, `client` (Sitzungs-ID),
+`systemMode` und einen Menübaum `items`. Für `con` wird kein Startmenü versendet.
+
+Der Server erzeugt pro Übertragung temporär `start_menu.json` in einem neuen,
+privaten Zufallsverzeichnis, liest sie und entfernt **Datei und Verzeichnis vor
+Rückkehr**. Unter Linux gelten `0700` fürs Verzeichnis und `0600` für die Datei.
+Unter Windows setzt die native Win32-API eine geschützte NTFS-DACL, die dem
+aktuellen Benutzer und `SYSTEM` Vollzugriff gewährt. Schlägt das Setzen der DACL
+fehl, wird die Datei nicht verwendet und kein ungeschütztes Fallback erstellt.
+Konten mit Administratorrechten können Windows-Dateischutzmaßnahmen grundsätzlich
+übernehmen; absolute Vertraulichkeit gegen lokale Administratoren besteht nicht.
+
+**RPC-Client:** Die Windows-95-Taskleiste bleibt über den Komponenten des
+Arbeitsfensters sichtbar. Links im anklickbaren Startfeld sitzt ein kleines,
+Qt-gezeichnetes vierfarbiges Windows-Symbol. Der Klick öffnet ein natives Qt-
+Popupmenü **oberhalb** der Taskleiste: grauer Win95-Stil, dunkelblaue Auswahl,
+linkes vertikales Windows-95-Band, verschachtelte Einträge wie `Programs →
+Accessories`. Der XP-Modus benutzt dieselbe JSON-Struktur mit eigener blau-weißer
+Darstellung. Die Menüdefinition wird auf das aktuell angemeldete Sitzungstoken
+und das passende Emulationsprofil geprüft. Das Console-Profil bleibt unverändert.
+
+Die JSON-Struktur darf **keine Befehle, Programmpfade oder beliebigen Aktionen**
+enthalten; der Client validiert Namen, Icons, Tiefe und Umfang. Die Menüpunkte
+sind **zunächst Platzhalter**: Ein Klick wird protokolliert, startet aber kein
+Programm. Für spätere Funktionalität sollten nur ausdrücklich zugelassene
+RPC-Aktionskennungen definiert werden. Die JSON-Menüdatei wird ausschließlich
+auf dem Server angelegt – nicht dauerhaft auf den Client kopiert. Die Menüs
+sind momentan in `pythonbde/start_menu.py` als Vorlage hinterlegt.
+
+Beispiel der zusätzlichen JSONL-Nachricht (gekürzt):
+
+```json
+{"event":"menu_config","menuVersion":1,"client":"session-1", "systemMode":"win95", "items":[{"id":"programs","label":"Programs","icon":"programs","children":[{"id":"accessories","label":"Accessories","icon":"folder","children":[{"id":"notepad","label":"Notepad","icon":"document"}]}]}]}
+```
+
+**Sicherheit:** Die NTFS-DACL schützt die *temporäre Datei auf dem Server*,
+nicht den Übertragungsweg. Wie bisher ist für vertrauliche RPC-/Menüdaten
+über das Netzwerk TLS oder VPN erforderlich.
+
+**Tests:** 186 automatisierte Tests erfolgreich (170 bestehende + 16 neue).
+Kein nativer PyQt5-Visualtest unter Windows/Linux in dieser Umgebung möglich.
+
+---
+
+## Neuerungen v0.5.0 – System Emulation und GUI/TUI Geometry
+
+**Eine Codebasis für Windows und Linux.** Die Systememulation bezeichnet zunächst
+**Qt5-Darstellungsprofile und ein Sitzungs-Flag**, keine virtuelle Maschine, kein
+Windows-95-/Windows-XP-Gastsystem und keine Ausführung fremder Betriebssystemprogramme.
+
+### Common
+
+Die bisherige Anmeldemaske ist in zwei nebeneinanderliegende Bereiche gegliedert:
+
+- **Connection (links):** Server IP / host, TCP Port (43650), Username, Password;
+  darunter weiterhin **Connect / Login** und **Disconnect**.
+- **System Emulation (rechts):** `Windows 95`, `Windows XP`, `Console`. Anfangs ist
+  `Windows XP` ausgewählt. Alle drei Optionen sind aktiv.
+
+### Display
+
+Links stehen weiterhin `Windowed` und der deaktivierte Dummy `Full Screen`.
+Rechts gibt es zwei Zeilen, jeweils **RadioButton links / ComboBox rechts**:
+
+| Auswahl | ComboBox-Einträge | Einheit |
+|---|---|---|
+| GUI Geometry | 640 x 480; 800 x 600; 1024 x 768; 1280 x 720; 1280 x 768; 1280 x 800; 1280 x 1024 | Pixel |
+| TUI Geometry | 80 x 25; 80 x 50 | Zeichen / Zeilen |
+
+Bei `Windows 95` oder `Windows XP` wird `GUI Geometry` ausgewählt; bei `Console`
+wird automatisch `TUI Geometry` gewählt. Die jeweilige andere ComboBox ist
+inaktiv. Wechselt der Benutzer von der TUI-Radiooption zurück zu GUI, wird das
+vorherige GUI-Profil wiederhergestellt (anfangs Windows XP).
+
+### Arbeitsfenster und Taskleiste
+
+- **win95:** graue Taskleiste mit klassisch eckigem Startfeld und Uhr.
+- **winXP:** blaue Verlaufstaskleiste mit grünem Startfeld und Uhr.
+- **con:** dunkle, monospace-basierte Konsolenansicht (80 Zeichen breit, 25/50
+  Zeilen). Das Fenster wird anhand der Schriftmetriken dimensioniert;
+  TUI-Werte sind **keine Pixelmaße**. Servernachrichten und `CreateWindow`
+  werden im Terminal angezeigt. Es gibt keine Taskleiste im Konsolenprofil.
+- Bei allen drei Modi bleibt das **frei verschiebbare Schließen-Icon** erhalten,
+  ebenso die max. gewählte Fenstergröße bzw. TUI-Zellzahl.
+
+### JSON-Lines-Protokoll
+
+Der Client sendet die Angaben zusammen mit der Login-Nachricht (auch bei
+Windows-Secrets-Verschlüsselung des Passwortes):
+
+```json
+{
+  "action": "login",
+  "username": "max",
+  "systemMode": "win95",
+  "display": {"unit": "pixels", "width": 800, "height": 600},
+  "passwordSecret": "<verschluesseltes-login-paket>"
+}
+```
+
+Für die Konsole werden `"systemMode": "con"` und z. B.
+`"display": {"unit":"cells", "width":80, "height":50}` übertragen.
+Bei einem erfolgreichen Login speichert der Server Modus und Geometrie **für
+jede einzelne TCP-Sitzung**, spiegelt sie in der Login-Antwort und sendet sie
+im anschließenden `rpc_request` mit `setFunc="CreateWindow"` zurück.
+Nicht unterstützte oder widersprüchliche Kombinationen werden abgewiesen.
+
+Bestehende Clients ohne `systemMode` nutzen kompatibel `winXP` + `640 x 480`.
+Für die neuen Darstellungsprofile müssen aber **Client und Server v0.5.0**
+verwenden. `rpcId` und `lastErrorCode` bleiben unverändert.
+
+**Sicherheit:** Dieses Profil ändert keine Benutzerrechte. Der Modus wird als
+unvertrauenswürdige Login-Angabe behandelt. Die Transportverschlüsselung aus
+v0.4.8 schützt nur das Login-Passwort bei Windows/Windows; für den vollständigen
+Netzwerkverkehr weiterhin TLS/VPN verwenden.
+
+**Tests:** 170 automatisierte Unit- und Strukturtests erfolgreich.
+Qt5-Fensterdarstellung und reale Win32-Laufzeit müssen noch am Zielsystem
+geprüft werden.
+
+---
+
+## Neuerungen v0.4.9 – RPC-Client mit Login-Tabs und Remote-Desktop-Header
+
+Die Änderung betrifft nur den **Qt5-RPC-Client** (`rpc_client.py`). Das Serverprotokoll,
+Benutzerkonten, Passworttransport, Logging, die verschiebbare Schließen-Schaltfläche
+und die bisherigen Login-Sperrregeln bleiben unverändert.
+
+### Anmeldung / Fensteraufteilung
+
+- Oberhalb der Tabs zeichnet `RemoteDesktopHeader` einen vertikalen Verlauf
+  **Blau → Weiß**, links ein stilisiertes Remote-Desktop-Symbol aus Qt-Vektoren,
+  rechts die Beschriftungen **Remotedesktop** und **Connection**.
+- Im `QTabWidget` befinden sich **Common** und **Display**.
+- **Common** enthält `Server IP / host` (`QLineEdit`), `TCP Port`
+  (`QSpinBox`, voreingestellt `43650`), `Username` und `Password`
+  (`QLineEdit` mit verdeckten Zeichen). Darunter **Connect / Login** und
+  **Disconnect**.
+- **Display** enthält eine GroupBox **Display:**. Links die Radiobuttons
+  **Windowed** und der weiterhin deaktivierte Dummy **Full Screen**,
+  rechts das Label **Geometrie** und die ComboBox.
+- Das bisherige **Settings**-Hauptmenü und das separate Settings-Dock wurden
+  entfernt. Das Menü enthält nur noch **File → Close** und
+  **Help → About ...**.
+- Der **Disconnected**-/Verbindungszustand wird als eigenes Label innerhalb
+  der `QStatusBar` angezeigt, **nicht mehr** als Zeile im Hauptlayout.
+- Unter den Tabs bleibt der schreibgeschützte Client-Logging-Editor sichtbar.
+
+### Neue Bildschirmgrößen / Größenbegrenzung
+
+```text
+640 x 480
+800 x 600
+1024 x 768
+1280 x 720
+1280 x 768
+1280 x 800
+1280 x 1024
+```
+
+Beim erfolgreichen Login wird das **eine** Arbeitsfenster in der ausgewählten
+Größe erzeugt. Qt erhält `setMaximumSize(width, height)` und anschließend
+`resize(width, height)`. **Verkleinern ist möglich**, erneutes Vergrößern
+geht nur bis zur beim Login gewählten Maximalgröße. Die Mindestgröße des
+Arbeitsfensters beträgt `120 x 90` Pixel. Die eingestellte Auflösung
+bezeichnet die Qt-Clientfläche; Betriebssystem-Titelrahmen können die äußeren
+Abmessungen vergrößern. Auf Bildschirmen mit kleinerer nutzbarer Fläche kann
+der Window Manager die initiale Größe einschränken.
+
+Das Arbeitsfenster zeigt weiterhin nur den freien Bereich und das frei
+verschiebbare Schließen-Icon. Ein Klick darauf trennt die Verbindung und
+öffnet wieder die Anmeldung. Die RPC-Nachricht `CreateWindow` verwendet
+weiterhin dieses vorhandene Arbeitsfenster.
+
+### Teststatus
+
+**154 automatisierte Tests erfolgreich**, inklusive neuer Qt-freier
+Strukturprüfungen. Die Syntaxprüfung und ZIP-Integrität wurden durchgeführt.
+Da PyQt5 in der verwendeten Testumgebung nicht installiert ist, fehlen
+weiterhin native Sicht- und Interaktionstests auf Windows/Linux.
+
+---
+
+Die folgenden Abschnitte dokumentieren **frühere Versionsstände**; deren
+Settings-Dock und alte Geometrien wurden in v0.4.9 ersetzt.
+
+## Neuerungen v0.4.8 – RPC Client Theme, verschiebbares Icon, Windows Secrets
+
+### GUI
+
+- **Settings → Client → Display:** `Windowed` und der deaktivierte
+  `Full Screen`-RadioButton bleiben **links**, Label **Geometrie** und
+  ComboBox (`480 x 460`, `800 x 600`, `1024 x 720`) stehen **rechts**.
+- Neue ToolBar im RPC-Loginfenster: **Mond bei hellem Theme**, **Sonne
+  bei dunklem Theme**. Umschalten wirkt global auf Qt5, einschließlich
+  der später erzeugten Dialoge. Navyblaue Scrollbars mit gelben Pfeilen.
+- Nach erfolgreichem Login verschwindet der Login-Screen. Das Client-
+  Arbeitsfenster hat einen **freien Arbeitsbereich** mit genau einem
+  gezeichneten runden Schließen-Icon (X). Mit gedrückter linker Maustaste
+  ist das Icon innerhalb des Arbeitsfensters **frei verschiebbar**.
+  Ein kurzer Linksklick (ohne Verschieben) schließt das Arbeitsfenster,
+  meldet den Client ab, trennt TCP und zeigt den Login-Screen wieder an.
+- `CreateWindow` wird weiterhin innerhalb desselben Arbeitsfensters
+  ausgeführt – es wird kein zweites Fenster erzeugt.
+
+### Windows Secrets / Server-Handshake
+
+**Benötigt ab dieser Version das Zusatzpaket `cryptography`** (siehe
+`requirements.txt`) auf Server und RPC-Client. Bei Start eines Windows-
+Servers wird einmal ein RSA-3072-Schlüsselpaar erzeugt; der private
+Schlüssel liegt **DPAPI-verschlüsselt** in `rpc_server_key.dpapi` direkt
+neben der Benutzerdatei. DPAPI ist an das aktuelle Windows-Benutzerkonto
+gebunden. Sicherung/Wiederherstellung unter anderer Windows-Identität
+muss gesondert geplant werden.
+
+Vor dem Passwortversand führt `rpc_client.py` den **JSONL-Handshake** aus:
+
+```json
+{"action":"hello","clientPlatform":"Windows"}
+```
+
+Antwort von einem Windows-Server (gekürzt):
+
+```json
+{"ok":true,"data":{"platform":"Windows","nonce":"<zufall>","passwordTransport":"RSA-OAEP-SHA256+AES-256-GCM","serverPublicKey":"<base64>","serverFingerprint":"<sha256>"}}
+```
+
+Bei **Windows ↔ Windows** sendet der Client niemals das Feld `password`,
+sondern ein `passwordSecret`-Objekt mit RSA-OAEP-geschütztem AES-256-
+Schlüssel und AES-GCM-verschlüsselten Anmeldedaten. Eine zufällige,
+**TCP-sitzungsgebundene Einmal-Challenge** verhindert die direkte
+Wiederverwendung alter Anmeldepakete. Die `passwordSecret`-Challenge
+wird bei einem Loginversuch serverseitig verbraucht.
+
+Der Client merkt sich die Identität (`serverFingerprint`) lokal in
+`%APPDATA%/PythonBDE/trusted_rpc_servers.json`. **Bei der allerersten
+Verbindung** muss der Benutzer den SHA-256-Fingerprint unabhängig prüfen
+und mit **OK** dauerhaft vertrauen; auf spätere Schlüsselwechsel oder
+Herabstufung von verschlüsselt zu unverschlüsselt reagiert der Client
+mit Verbindungsabbruch. *Trust on First Use* verhindert **keinen**
+Man-in-the-Middle-Angriff bei einer ungeprüften ersten Verbindung.
+
+Bei **Linux ↔ Linux** und **Windows ↔ Linux** erscheint vor der
+Passwortanmeldung exakt dieser Dialog:
+
+```text
+Warning: Plain Password connection !
+Would you connect ?
+[OK] [Cancel]
+```
+
+`Cancel` beendet die kurzzeitige **TCP-Vorprüfung**, ohne Credentials zu
+senden. `OK` startet den Login mit unverschlüsseltem Passwort.
+Windows-Server lehnen unverschlüsselte Legacy-Anmeldungen ohne explizite
+`clientPlatform=Linux`- und `allowPlaintext=true`-Freigabe ab. Da die
+Clientplattform aus einer nicht attestierten JSON-Angabe stammt, ist
+diese Freigabe **keine kryptografische Sicherungsgrenze**.
+
+**Wichtige Einschränkung:** Das Windows-Secrets-Verfahren verschlüsselt
+**nur das Login-Passwort**, nicht die gesamte RPC-/JSONL-Kommunikation.
+Ein Angreifer mit Zugriff auf das Netzwerk kann andere JSONL-Nachrichten
+sehen oder manipulieren. Für produktiven Betrieb mit mehreren Rechnern
+bleiben **gegenseitig geprüfte TLS-Verbindungen oder ein VPN erforderlich**.
+Der JSONL-Protokoll-Handshake verlangt Server und RPC-Client **v0.4.8**.
+Bei einem älteren Server wird kein Passwort gesendet, sondern die
+Anmeldung abgebrochen. Der bisherige einfache `client_example.py` ist
+nicht für den neuen Windows-Secrets-Handshake modernisiert.
+
+### Teststand
+
+147 Python-Tests erfolgreich (zzgl. 22 Subtests): bestehende Serverlogik,
+Login/RPC, RSA-AES-GCM-Roundtrip, Challenge-/Replay-Schutz,
+Fingerprint-Persistenz und Client-Code-Struktur. Native Tests mit
+**Windows DPAPI und PyQt5-Interaktion** sind in der Entwicklungsumgebung
+nicht möglich und müssen auf einem Windows-Rechner erfolgen.
+
+---
+
+## Neuerungen v0.4.7 – 60-Sekunden-Login-Intervall und RPC-Client-Display
+
+### Wiederanmeldung auf dem Server
+
+Für jeden Benutzernamen beginnt **bei einer erfolgreichen Anmeldung** eine
+60-Sekunden-Frist. Wird die Sitzung vor Ablauf beendet (Logout, TCP-Abbruch,
+Clientfenster schließen, Kick), muss der Benutzer bis zum Ablauf der Frist warten,
+bevor er sich mit einer *neuen TCP-Sitzung* erneut anmelden kann. Beispiel:
+Login um 12:00:00, Logout um 12:00:10 → nächster Login frühestens 12:01:00.
+Diese Regel wird nach gültiger Passwortprüfung kontrolliert; falsche Passwörter
+starten keine neue Sperre. Die gleiche bereits authentifizierte Verbindung darf
+weiterhin Re-Authentifizierung ohne Neuanmeldung durchführen.
+
+```json
+{"ok":false,"error":"Erneute Anmeldung erst in 50 Sekunden möglich","errorCode":429,"retryAfterSeconds":50}
+```
+
+Beim konkurrierenden Zweitlogin eines bereits aktiven Accounts gilt weiterhin
+die **20-Sekunden-Doppelanmeldesperre (`409`)**. Nach Schließen der ersten
+Sitzung kann zusätzlich die verbleibende 60-Sekunden-Frist (`429`) greifen.
+Beide Schutzmechanismen verändern die erste gültige Verbindung nicht.
+
+Die 60-Sekunden-Frist basiert auf `time.monotonic()` und besteht **innerhalb
+der laufenden Serverinstanz**. Ein kompletter Neustart des Serverprogramms
+setzt den flüchtigen Fristenspeicher zurück; diese Version schreibt keine
+Login-Sperrzeiten in die bestehende `users.dbf`.
+
+### Neuer Qt5-RPC-Client
+
+Start wie bisher mit `python rpc_client.py --host 127.0.0.1 --port 43650`.
+
+- Menü **File → Close** trennt die aktive Verbindung und beendet das
+  Clientprogramm auch dann, wenn die Qt-Eventloop das Clientfenster gewechselt hat.
+- Menü **Settings → Client** zeigt ein `QDockWidget` innerhalb des
+  Login-Screens unter den Buttons **Connect / Login** und **Disconnect**.
+  Darin: GroupBox **Display:** mit **Windowed** und vorbereitetem,
+  deaktiviertem **Full Screen** sowie der ComboBox **Geometrie** mit
+  `480 x 460`, `800 x 600`, `1024 x 720`.
+- Menü **Help → About ...** öffnet einen zentrierten Dialog mit
+  `RPC Client v.0.4`, `(c) 2026 by Jens Kallup - paule32` und
+  `all rights reserved.`; Farben werden von der Qt-Palette geerbt.
+- Logging als schreibgeschützter `QPlainTextEdit` unter dem Settings-Dock:
+  `YYYY-MM-DD HH:MM:SS | Statuscode | Einzeiliger Text`.
+  Neueste Meldungen stehen oben, maximal 500 Zeilen.
+- **Erfolgreicher Login:** Ein einziges Client-Kommunikationsfenster wird
+  mit der ausgewählten Geometrie gezeigt; der Login-Screen wird ausgeblendet.
+  Das `CreateWindow`-RPC wird **in diesem Fenster** ausgeführt; es wird
+  kein zusätzliches Top-Level-Fenster pro RPC erzeugt.
+- **Clientfenster schließen:** Logout/TCP-Trennung und automatisches
+  Wiederanzeigen des Login-Screens. Netzwerkfehler verhalten sich analog.
+- Unbekannte RPC-Funktionen werden mit einem Fehlercode abgelehnt; es werden
+  weder Shellbefehle noch beliebige Codefragmente aus Netzwerknachrichten
+  ausgeführt.
+
+**Sicherheit:** Das JSONL/TCP-Protokoll transportiert Passwörter bisher ohne
+Transportverschlüsselung. Im LAN nur über TLS-Tunnel oder VPN verwenden.
+
+**Teststand:** 136 Unittests unter Linux erfolgreich, inkl. serverseitiger
+Loginfrist und der clientseitigen RPC-Dispatch-/GUI-Steuerungsmethoden.
+Ein echter PyQt5-Fenster-/Netzwerk-Funktionstest unter Windows und Linux
+steht noch aus (PyQt5 nicht in der Ausführungsumgebung installiert).
+
+---
+
+## Neuerungen v0.4.6 – Mehrfachlogin-Schutz und Blocking-Dock
+
+### Zweitlogin mit identischem Benutzernamen
+
+Bei einem **zweiten, gültig authentisierten Login** desselben Benutzers von
+**einer anderen TCP-Verbindung** bleibt die bereits angemeldete Sitzung
+unverändert aktiv. Der zweite Client erhält eine JSONL-Fehlermeldung:
+
+```json
+{"ok":false,"error":"Benutzer bereits angemeldet; mindestens 20 Sekunden gesperrt (und bis die bestehende Sitzung endet)","errorCode":409,"retryAfterSeconds":20}
+```
+
+Ab dem ersten Zweitlogin-Versuch läuft eine **20-Sekunden-Sperre je Benutzername**.
+Auch wenn die ursprüngliche Sitzung innerhalb dieser Zeit beendet wird, kann
+sich der zweite Client erst nach deren Ablauf anmelden. Solange die ursprüngliche
+Sitzung aktiv bleibt, ist auch danach kein zweiter Login möglich. Weitere
+konkurrierende Versuche nach dem Ablauf starten ein neues 20-Sekunden-Fenster.
+Eine bereits authentisierte TCP-Sitzung wird nicht ausgesperrt und bleibt
+handlungsfähig. Falsche Kennwörter setzen **keine** Zweitlogin-Sperre; die
+vorhandenen Passwort-Fehlversuchsregeln gelten unabhängig davon.
+
+Der Qt5-Client `rpc_client.py` zeigt bei `errorCode=409` eine Warnung an und
+nennt die Restwartezeit. Die Ablehnung wird im Server-Logging mit Status 400
+protokolliert; die TCP-Antwort enthält weiterhin eine einzelne JSON-Zeile.
+
+### Menü „Block“ und neues Blocking-Dock
+
+Das neue Hauptmenü steht **neben Manager**, vor Help:
+
+- `Block -> IP Range Blocking`
+- `Block -> Port Range Blocking`
+- `Block -> IP Blocking`
+- `Block -> Port Blocking`
+- `Block -> Block Domain`
+
+Jeder Eintrag aktiviert dasselbe exklusive Docking-Fenster. Andere Docks werden
+ausgeblendet und bei Schließen des Blocking-Docks wiederhergestellt.
+
+Das linke `QTreeWidget` führt die Knoten **IP Range Blocking**, **Port Range
+Blocking**, **IP Blocking**, **Port Blocking**, **Domain Blocking** und **User
+Blocking**. Neue Regeln werden als Blätter eingefügt. Die sechs Buttons über
+der Baumansicht (z.B. `IP-Range-Block`, `Port-Range-Block`) sowie das Kontextmenü
+am jeweiligen Baumknoten legen Regeln an. Links und rechts sind durch einen
+**horizontalen QSplitter** getrennt, ein **vertikaler QSplitter** trennt
+den Eingabebereich vom gemeinsamen Live-Log (`QPlainTextEdit`).
+
+Im rechten Panel werden abhängig vom Regeltyp ein oder zwei Eingaben angezeigt:
+
+| Typ | Eingabefelder | Wirkung |
+| --- | --- | --- |
+| IP Range | Start IPv4, End IPv4 | IPv4 inklusive beider Grenzen |
+| Port Range | Start Port, End Port | TCP-**Quellport** des Clients |
+| IP | IPv4 Address | Eine Client-IP |
+| Port | Client Source Port | Ein TCP-Client-Quellport |
+| Domain | DNS Domain | IPv4-Adressen der aufgelösten Domain |
+| User | Username | Benutzername, case-insensitive |
+
+`Save` legt die Regel an bzw. aktualisiert sie. `Delete` fragt nach Bestätigung.
+Eingaben werden vor dem Schreiben validiert (IP-Bereichsreihenfolge,
+IPv4/Portwerte, DNS-Namen). Die Regeln liegen **atomar** gespeichert in
+`blocking.json` **neben** `users.dbf`; unter Linux mit Dateirechten `0600`.
+Die Benutzer-DBF und ihr Schema bleiben unverändert.
+
+Bei **jedem neuen Login** prüft der Server die echten Socket-Metadaten
+(`peerAddress`, `peerPort`) und den Benutzernamen **vor** der Passwortprüfung.
+Eine zutreffende Regel liefert:
+
+```json
+{"ok":false,"error":"Login abgewiesen: Blocking-Regel aktiv","errorCode":403,"retryAfterSeconds":0}
+```
+
+Aktuell angemeldete TCP-Verbindungen werden bei einem neu gespeicherten Block
+**nicht automatisch beendet**; der Block gilt für neue Anmeldungen.
+
+**Wichtige Netzwerkgrenzen:** TCP-Client-Quellports sind meist dynamisch,
+daher können Port-Blocking-Regeln über Neustarts hinweg unzuverlässig sein.
+Domainregeln lösen Domainnamen **asynchron** über das Betriebssystem auf und
+vergleichen die ermittelten IPv4-Adressen mit der Client-IP. DNS-Antworten
+werden regelmäßig aktualisiert (ca. 60 Sekunden), aber bis zur ersten
+erfolgreichen Auflösung greift eine Domainregel nicht. Shared Hosting, NAT,
+mehrere Domains pro IP und wechselnde DNS-Adressen können das Verhalten
+beeinflussen. **Ein Domainname ist keine sichere, unveränderliche Identität
+eines Netzwerkteilnehmers**. Für verbindliche Sperren vorzugsweise IP/IP-Bereich
+und ggf. Benutzername verwenden.
+
+Der bestehende TCP-Kanal überträgt Login-Passwörter noch ohne TLS;
+für externe Netzverbindungen ist TLS-Absicherung oder VPN notwendig.
+
+### Test
+
+```bash
+python -m unittest discover -s tests -q
+```
+
+Es wurden Regeln, Dateipersistenz, DNS-Cache, den 20-Sekunden-Lockout,
+Client-Socket-Zuordnung, JSONL-Antworten und alte RPC-/DBF-Funktionen geprüft.
+Die **native PyQt5-GUI** muss unter Windows/Linux noch visuell getestet werden.
 
 ## Neuerungen v0.4.4 – bidirektionales JSONL-RPC (CreateWindow)
 
@@ -401,3 +855,92 @@ Rahmenfarbe sofort als **Vorschau**. Erst `Save User` übernimmt die Änderungen
 Eine abgelaufene `LOCKUNTIL`-Sperre schaltet automatisch zurück auf Rot bzw.
 Grün. `EXPIRE` wird unverändert als eigene Kontogültigkeitsregel behandelt
 und stellt keine `LOCKUSER`-Sperre dar.
+
+
+### Disconnect-Audit (v0.4.5)
+
+Wenn der RPC-Testclient beendet, die Verbindung unterbrochen, ein Benutzer abgemeldet, gekickt oder der Server gestoppt wird, wird für die TCP-Sitzung ein eindeutiger Eintrag erzeugt:
+
+```text
+2026-10-26 08:32:45 | 200 | Client disconnected: user=max, client=session-1, ip=127.0.0.1, reason=connection closed
+```
+
+Die bestehende GUI zeigt den Eintrag über das `audit`-Signal sofort an, sofern sie sichtbar ist. `python_bde.log` speichert dieselbe Meldung neben der `users.dbf` und kann auch bei versteckter GUI gelesen werden. Ein expliziter `logout` erzeugt zusätzlich einen gesonderten Logout-Vermerk; das ist keine doppelte Disconnect-Meldung.
+
+## v0.5.3 – Windows XP desktop, desktop icon grid and signed remote .cpy applications
+
+### Windows XP background
+
+The WinXP GUI workspace draws an **original**, XP-inspired blue-sky/green-hills
+background with Qt `QPainter` and `QPixmap`; this is **not** Microsoft's
+copyrighted Bliss photograph. Windows 95 retains the teal `#008080` desktop.
+The Qt theme toggle does not override the emulated desktop wallpaper.
+
+### Desktop icons
+
+- Graphics occupy **48 × 48 pixels**, with centered text beneath them.
+- Pressing an icon draws a temporary translucent selection overlay, removed
+  as soon as the mouse is released.
+- While dragging, a **48 × 48** snap grid is displayed. On release, the icon
+  snaps to a cell; moving it does not trigger its click action.
+- The **Disconnect** icon closes the work area and ends the client connection.
+- Emulated Start menu and taskbar always remain inside the workspace, rather
+  than changing the native operating system desktop.
+
+### Running remote-compiled Python modules (.cpy)
+
+PythonBDE supports a small signed `.cpy` format: a ZIP container with
+`manifest.json` and **compiled CPython bytecode** `module.pyc`. It is built on
+**the server** from a strict allowlist of source modules in
+`pythonbde/remote_apps/` and delivered in a `module_package` JSON message.
+The executable code is never sent as plaintext Python source. Each transferred
+package is signed with **Ed25519**, including the module name, TCP session and
+request ID, then checked against a **separately installed** trusted public key
+on the client. SHA-256 verifies package integrity; incompatible CPython minor
+versions are rejected.
+
+**First use – prepare trust, before launching the client:**
+
+1. On the server machine (with the **same Windows user account** that starts
+   `server.py`), run `python module_keys.py --dbf PATH/TO/users.dbf`. Use exactly
+   the DBF path passed to `server.py`; otherwise the keys will be written into
+   a different directory. The private key is encrypted with Windows DPAPI on
+   Windows; Linux stores it using file mode `0600`.
+2. Copy **only** `module_signing_public.pem` from that DBF directory to the
+   RPC-client directory, and name the copy **`trusted_module_signing_public.pem`**.
+   Verify its SHA-256 fingerprint through an independent trusted channel,
+   comparing it with the output of `module_keys.py`.
+3. Alternatively, set `PYTHONBDE_TRUSTED_MODULE_KEY` to the full path of the
+   independently verified public PEM file.
+4. Start the server (`python server.py`) and client (`python rpc_client.py`).
+   Log in (respecting the existing 20/60-second login policies), choose Win95
+   or WinXP, then choose **Programs → Accessories → Notepad** or
+   **Programs → Accessories → Calculator**. The server compiles/signs the
+   requested module; the client verifies it and creates a movable MDI window.
+5. Other enabled Start-menu leaves have safe *placeholder* `.cpy` modules
+   (e.g. Explorer/Help); they do **not** access local files, execute commands,
+   or shut down the host.
+
+The protocol flow is:
+
+```
+client -> server: {"action":"load_module","moduleId":"notepad","requestId":"m1"}
+server -> client: {"ok":true,"data":{"moduleQueued":true,...}}
+server -> client: {"event":"module_package","client":"session-1",
+                    "requestId":"m1","moduleId":"notepad",
+                    "format":"pythonbde-cpy/1","cpy":"<base64>",
+                    "sha256":"<hex>","signature":"<base64>","keyId":"<hex>"}
+```
+
+All installed modules appear inside **QMdiArea**. MDI windows can be moved,
+minimized and restored; the taskbar creates one button per running module at
+launch, leaves it visible when minimized and removes it on close. Clicking the
+button toggles minimizing/restoring the module window.
+
+**Security limitations:** Signed `.cpy` modules execute with the client
+process's full operating-system permissions. A signature is a provenance
+check, **not** a sandbox. Only sign and distribute audited server modules, and
+keep the signing private key secret. The current JSON/TCP transport is not
+fully TLS protected; deploy behind TLS/VPN for production and independently
+verify the public key. This prototype does not support arbitrary uploaded
+modules, cross-CPython-version bytecode or arbitrary external program starts.

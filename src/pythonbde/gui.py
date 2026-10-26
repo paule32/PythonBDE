@@ -24,6 +24,8 @@ from .user_visuals import account_border
 from .eventlog import EventLog
 from .aliases import AliasError, AliasInUse
 from .theme import apply_application_theme, theme_icon
+from .blocking_dock import BlockingDock
+from .blocking import TYPES
 
 
 class CredentialDialog(QDialog):
@@ -305,7 +307,7 @@ class LogStatusPanel(QWidget):
         self.info.setTextInteractionFlags(Qt.TextSelectableByMouse)
         status_layout.addWidget(self.info)
         self.sessions = QTreeWidget()
-        self.sessions.setHeaderLabels(["Logged-in User", "Login Time (UTC)", "RPC Status", "LastErrorCode"])
+        self.sessions.setHeaderLabels(["Logged-in User", "Login Time (UTC)", "Emulation", "RPC Status", "LastErrorCode"])
         self.sessions.setColumnWidth(0, 210)
         self.sessions.setContextMenuPolicy(Qt.CustomContextMenu)
         self.sessions.customContextMenuRequested.connect(self.session_menu)
@@ -378,6 +380,7 @@ class LogStatusPanel(QWidget):
         selected = None
         for session in status["sessions"]:
             node = QTreeWidgetItem(self.sessions, [session["username"], session["login_time"],
+                                                   session.get("system_mode", "winXP"),
                                                    session.get("rpc", "idle"),
                                                    str(session["rpc_error_code"]) if session.get("rpc_error_code") is not None else "-"])
             node.setData(0, Qt.UserRole, session["session_id"])
@@ -956,6 +959,7 @@ class MainWindow(QMainWindow):
         self.manager_dock = None
         self.backup_dock = None
         self.aliases_dock = None
+        self.blocking_dock = None
         self.setWindowTitle(f"PythonBDE – BDE Server ({operating_system()})" + self.COPYRIGHT)
         # QMainWindow besitzt bewusst kein centralWidget: der User-Manager
         # soll die *gesamte* freie Fläche füllen. Ein verborgenes Dashboard
@@ -1001,6 +1005,14 @@ class MainWindow(QMainWindow):
         self._menu_action(manager_menu, "Users", self.show_users)
         self._menu_action(manager_menu, "Aliases", self.show_aliases)
         self._menu_action(manager_menu, "Backup", self.show_backup)
+        block_menu = self.menuBar().addMenu("Block")
+        for category, text in ((TYPES[0], 'IP Range Blocking'),
+                               (TYPES[1], 'Port Range Blocking'),
+                               (TYPES[2], 'IP Blocking'),
+                               (TYPES[3], 'Port Blocking'),
+                               (TYPES[4], 'Block Domain')):
+            self._menu_action(block_menu, text,
+                              lambda checked=False, c=category: self.show_blocking(c))
         help_menu = self.menuBar().addMenu("Help")
         self._menu_action(help_menu, "Informations", self.show_informations)
         self._menu_action(help_menu, "About ...", self.show_about)
@@ -1141,6 +1153,20 @@ class MainWindow(QMainWindow):
         self.aliases_dock._render_log()
         self._show_exclusive_dock(self.aliases_dock)
 
+    def show_blocking(self, category=None):
+        if self.blocking_dock is None:
+            self.blocking_dock = BlockingDock(self)
+            self.log_panels.append(self.blocking_dock)
+            self.addDockWidget(Qt.TopDockWidgetArea, self.blocking_dock)
+            self.blocking_dock.hide()
+            self.blocking_dock.visibilityChanged.connect(
+                lambda visible: self._restore_after_dock(self.blocking_dock, visible))
+        self.blocking_dock.refresh()
+        if category in TYPES:
+            self.blocking_dock.new_rule(category)
+        self.blocking_dock._render_log()
+        self._show_exclusive_dock(self.blocking_dock)
+
     def show_backup(self):
         if self.backup_dock is None:
             self.backup_dock = BackupDock(self)
@@ -1174,7 +1200,7 @@ class MainWindow(QMainWindow):
 
     def show_about(self):
         QMessageBox.about(self, "About PythonBDE",
-                          "PythonBDE v0.4.4" + self.COPYRIGHT +
+                          "PythonBDE v0.5.1" + self.COPYRIGHT +
                           "\nBDE-style server\nQt5 / Python / Windows + Linux\nPBKDF2-HMAC-SHA256")
 
     def activate_from_second_instance(self):

@@ -1,4 +1,92 @@
+## v0.5.3 (2026-10-26)
+
+- WinXP GUI workspace with an original painter-generated blue sky and green hill background; Win95 teal unchanged.
+- Icon graphics 48×48 pixels, centered caption, press overlay, visible 48×48 snap grid during dragging.
+- Qt QMdiArea hosts individually movable, minimizable and restorable signed remote Python module windows.
+- Taskbar adds an application button at module launch; button toggles minimize/restore; removed on close.
+- New `load_module` JSON RPC exchanges signed `.cpy` Python bytecode packages; authentication and session-binding are mandatory.
+- Ed25519 signature and independently pinned publisher key, SHA-256 integrity, CPython bytecode magic/version validation, strict server allowlist.
+- Server publisher keys persisted beside users.dbf (Windows DPAPI private key; Linux 0600); `module_keys.py` generates/exposes the public identity for trusted distribution.
+- Two sample modules Notepad and Calculator; remaining enabled Start items use no-shell placeholder modules.
+- Existing protocol and platform checks retained; no arbitrary path execution.
+- 208 automatic tests passed including new signature, replay, ABI, grid and MDI structure regression tests; Qt5 visual runtime not yet checked.
+
 # PythonBDE Änderungsübersicht
+
+## v0.5.2 (2026-10-26)
+
+- Windows-95-Desktop im RPC-Arbeitsfenster mit klassischem Petrolgrün `#008080` gezeichnet.
+- Hintergrund bleibt auch beim Umschalten des Client-Light-/Dark-Themes erhalten.
+- Graue Taskleiste und Startmenü unverändert; Windows XP/Console bleiben unverändert.
+- Weitere Regressionstests für den Windows-95-Arbeitsfenster-Hintergrund.
+
+## v0.5.1 (2026-10-26)
+
+- Server versendet nach Login und CreateWindow ein sitzungsgebundenes JSONL-Startmenü (`menu_config`) an Win95-/WinXP-Clients.
+- Die JSON-Datei existiert nur für die Übertragung in privatem Temporärverzeichnis und wird sofort entfernt. Windows: Win32-NTFS-DACL für aktuelles Benutzerkonto und SYSTEM, fail-closed bei Fehlern. Linux: 0700/0600.
+- Windows95/XP Start-Schaltfläche anklickbar; Windows-95-Logo, klassischer Menü-Stil mit vertikalem Band, Untermenüs, sichere Icon-Nachbildungen.
+- Taskleiste bleibt oberhalb des Arbeitsbereichs; Menü öffnet oberhalb der Taskleiste.
+- Keine beliebige Befehlsausführung aus JSON; Menüeinträge sind vorerst protokollierte Platzhalter.
+- 186 automatisierte Tests erfolgreich. Visueller Qt5-/Windows-DACL-Test weiterhin ausstehend.
+
+
+## v0.5.0 (2026-10-26)
+
+- Common-Tab in zwei Bereiche geteilt: Verbindung links, System Emulation rechts (Windows 95 / Windows XP / Console).
+- Display-Tab mit GUI Geometry (sieben Pixelauflösungen) und TUI Geometry (80 x 25 / 80 x 50) als Radio/Combo-Zeilen.
+- Modi synchronisieren die Geometrie-Auswahl. Full Screen bleibt Dummy.
+- Qt5-Taskleisten für Win95 (klassisches Grau) und WinXP (blau/grüner Startbereich); Console als 80-spaltige monochrome Textansicht.
+- JSONL-Login trägt geprüften `systemMode` (`win95`, `winXP`, `con`) und `display` (`pixels`/`cells`) mit sich.
+- Modus/Geometrie pro Sitzung gespeichert und im `CreateWindow`-RPC zurückgegeben; Client prüft Übereinstimmung.
+- TCP-RPC-, Passwort- und Account-Sperrverhalten bleibt erhalten. Alte Clients ohne Profil erhalten WinXP als Fallback.
+- 170 automatisierte Tests erfolgreich; tatsächliche Qt5-Anzeige unter Windows/Linux noch nicht geprüft.
+
+## v0.4.9 (2026-10-26)
+
+- RPC-Login mit blau-weißem Qt-gemaltem Remote-Desktop-Header, Beschriftung Remotedesktop/Connection und Tabs Common/Display.
+- Common: Host, Port-SpinBox (43650), Benutzername, Passwort, Connect und Disconnect.
+- Display: Windowed, Full Screen (weiterhin Dummy) und sieben neue Auflösungen, von 640x480 bis 1280x1024.
+- Arbeitsfenster öffnet beim Login in der eingestellten Größe, lässt sich nur verkleinern oder bis zur maximal gewählten Größe zurückvergrößern.
+- Altes Settings-Menü und Client Settings-Dock entfernt; Verbindungszustand in QStatusBar verschoben.
+- 154 automatisierte Tests erfolgreich; native PyQt5-Anzeigetests auf Windows/Linux noch offen.
+
+## v0.4.8 (2026-10-26)
+
+- RPC-Client Display GroupBox zweispaltig: links Windowed/Full Screen, rechts Geometrie-Label/ComboBox.
+- Client-Theme-ToolBar: Mond/Sonne, Light/Dark, einheitliches Qt5-QSS inkl. navyblauen Scrollbars.
+- Nach Login freies Arbeitsfenster mit selbst gezeichnetem, verschiebbarem Schließen-Icon; Mausklick schließt und trennt die Clientverbindung.
+- Windows/Windows JSONL-Handshake mit DPAPI-geschützter Server-RSA-3072-Identität, SHA256-Fingerprint-Pinning und Challenge-gebundenem RSA-OAEP/AES-256-GCM-Passwortpaket.
+- Mixed/Linux-Plattformen erhalten vor dem Login die geforderte OK/Cancel-Klartextwarnung. Kein stillschweigender Downgrade bei bereits gepinnten Windows-Servern.
+- Nur Login-Passwort geschützt; TLS/VPN bleibt für Schutz des gesamten RPC-Verkehrs nötig. Native Qt5-/DPAPI-Prüfung noch offen.
+- 147 Unit-Tests und 22 Subtests erfolgreich; ZIP-Integrität und Syntax geprüft.
+
+## v0.4.7 (2026-10-26)
+
+- Per-Account-Wiederanmeldeintervall 60 Sekunden ab letztem erfolgreichem Login, auch nach Logout oder Disconnect; JSONL-Fehler 429 mit Restsekunden.
+- Vorhandene 20-Sekunden-Konfliktsperre bei parallel aktiver Sitzung unverändert, erste Sitzung wird nicht verdrängt.
+- RPC Client mit File/Settings/Help Menü, zentriertem About-Dialog, Anzeigeoptionen (Windowed / Full Screen Dummy / Geometrie).
+- Login-Screen wechselt nach Login zum einzigen Kommunikationsfenster, RPC CreateWindow wird darin verarbeitet; Fenster schließen stellt Login-Screen wieder her und trennt TCP.
+- QPlainTextEdit-Protokoll mit Lokalzeit, Statuscode, einzeiligem Text, neueste Einträge zuerst, maximal 500 Zeilen.
+- 136 automatisierte Tests erfolgreich; native Qt5-Oberfläche ungetestet.
+
+
+## v0.4.6 (2026-10-26)
+
+- Login auf einer zweiten TCP-Verbindung mit einem bereits aktiven Benutzernamen wird abgewiesen (`errorCode=409`, 20 Sekunden Wartefrist); bestehende Sitzung bleibt unangetastet.
+- Vor dem Login serverseitige Sperrregelprüfung (`errorCode=403`) für IPv4-Adressen und IP-Bereiche, TCP-Quellports und Port-Bereiche, DNS→IP-Zuordnungen sowie Benutzernamen.
+- Neuer Hauptmenüpunkt `Block` und exklusives Blocking-Dock mit sechs Baumknoten, horizontalem/vertikalem Splitter, Save/Delete und gemeinsamem Log.
+- Atomare Speicherung `blocking.json` neben der DBF; Login-/Blocking-Ablehnungen im Audit-Log.
+- Domain-DNS-Abfragen asynchron und periodisch; bestehendes JSONL-RPC-Protokoll ansonsten unverändert.
+- RPC-Testclient zeigt Blockierungsfehler mit Countdown in einer MessageBox.
+
+## v0.4.5 (2026-10-26)
+
+- Ein zentraler Disconnect-Audit-Eintrag pro TCP-Sitzung bei Clientfenster-/Programmende und Netzwerktrennung.
+- Logzeile mit Benutzername (auch nach Logout), Session-ID, Client-IP und Ursache.
+- Ursachen `connection closed`, `logout`, `kicked by administrator`, `account banned by administrator`, `server stopped`.
+- Logging im vorhandenen Qt5-Loggingfenster und in `python_bde.log`; keine Änderungen am DBF-Schema.
+- Schutz vor doppelten Disconnect-Einträgen, auch wenn Qt beim Serverstopp sofort `disconnected` signalisiert.
+
 
 ## v0.4.4 (2026-10-25)
 
@@ -82,3 +170,4 @@
 - Admin- und Lock-User-Checkbox aktualisieren die Vorschaufarbe sofort; gespeichert wird weiterhin erst mit "Save User".
 - Eine zeitliche Sperre wird im laufenden Betrieb neu geprüft (1 Sekunde), ohne ungespeicherte Formularfelder zurückzusetzen.
 - Automatisierte Tests der Statusfarbenauswahl hinzugefügt.
+
