@@ -1,0 +1,13 @@
+# Runtime data: never push local users, logs or secrets
+*.dbf
+*.log
+pythonbde.ini
+blocking.json
+aliases.json
+rpc_server_key.dpapi
+module_signing_private.key
+module_signing_public.pem
+trusted_module_signing_public.pem
+__pycache__/
+*.py[cod]
+.venv/

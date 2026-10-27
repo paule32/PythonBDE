@@ -24,6 +24,7 @@ DEFAULT_MENU = [
     {"id": "programs", "label": "Programs", "icon": "programs", "children": [
         {"id": "accessories", "label": "Accessories", "icon": "folder", "children": [
             {"id": "notepad", "label": "Notepad", "icon": "document"},
+            {"id": "wordpad", "label": "WordPad", "icon": "document"},
             {"id": "calculator", "label": "Calculator", "icon": "program"},
         ]},
         {"id": "startup", "label": "StartUp", "icon": "folder", "children": [

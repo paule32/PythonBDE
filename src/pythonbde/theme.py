@@ -147,6 +147,19 @@ def theme_stylesheet(dark: bool) -> str:
     QPushButton:pressed { background-color: @SELECTED@; color: white; }
     QPushButton:disabled, QToolButton:disabled { color: @DISABLED@; }
     QCheckBox, QRadioButton { spacing: 5px; }
+    QCheckBox::indicator, QRadioButton::indicator {
+        width: 15px; height: 15px;
+        border: 2px solid @INDICATOR@;
+        background-color: @BASE@;
+    }
+    QCheckBox::indicator { border-radius: 3px; }
+    QRadioButton::indicator { border-radius: 9px; }
+    QCheckBox::indicator:checked, QRadioButton::indicator:checked {
+        background-color: @SELECTED@; border-color: @INDICATOR@;
+    }
+    QCheckBox::indicator:disabled, QRadioButton::indicator:disabled {
+        border-color: @BORDER@;
+    }
     QSplitter::handle { background-color: @BORDER@; }
     QSplitter::handle:horizontal { width: 3px; }
     QSplitter::handle:vertical { height: 3px; }
@@ -186,7 +199,7 @@ def theme_stylesheet(dark: bool) -> str:
         "LEFT": image("scroll_left.png"), "RIGHT": image("scroll_right.png"),
     }.items():
         qss = qss.replace("@" + key + "@", value)
-    return qss
+    return qss.replace("@INDICATOR@", "#D7E7FF" if dark else "#46576F")
 
 
 def apply_application_theme(dark: bool) -> None:

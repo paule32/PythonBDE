@@ -1,3 +1,56 @@
+## v0.5.9 TLS CA-Chain Fix
+- Generierung einer privaten CA (`ca.crt`, `ca.key`) plus Serverzertifikat (`server.crt`, `server.key`).
+- Client vertraut der CA, nicht dem Server-Leaf; prueft CA-Eignung und Hostname.
+- Alte Zertifikate werden nicht automatisch geloescht/ueberschrieben.
+- Bestehendes JSON-RPC-Protokoll bleibt unveraendert.
+
+## v0.5.8 (2026-10-27)
+
+- Integrierter `TLSTcpServer` mit QSslSocket und Registrierung von Sitzungen erst nach TLS-Handshake (`encrypted`). Kein Klartext-Fallback bei aktiviertem TLS.
+- SSL/TLS-Schutz für Login, CreateWindow, Startmenü, signierte `.cpy`-Module und virtuelle Dateiserver-RPCs.
+- RPC-Client nutzt QSslSocket, verifiziert Zertifikatskette und Servername, verbindet über `connectToHostEncrypted`, prüft TLS vor Senden/Empfangen.
+- Server-Settings: TLS Enable, PEM-Zertifikat/Key und Test Certificate; INI-Persistenz, TLS-Startvalidierung.
+- Neues `generate_tls_certificate.py` mit RSA-3072, X.509 SAN und restriktiven Schlüsselrechten; Dokumentation in `TLS_SETUP.md`.
+- Python-CLI-Beispielclient auf SSL umgestellt; TLS verpflichtend mit vorab vertrauenswürdigem Zertifikat.
+- Tests: X.509, SSL-Handshake mit Hostname-Prüfung, kein RPC vor TLS; 258 automatische Tests. Kein nativer Qt-Socket-Test in dieser Umgebung.
+
+## v0.5.7 (2026-10-27)
+
+- Added mutually exclusive User Permissions `Use as RDP` and `Use as DB` radio buttons; ACCTYPE and FSROOT fields in dBASE III users table with backward-reading of old schema.
+- Distinct `systemMode=db` login marker; DB users cannot start Win95/WinXP RDP sessions. RDP users cannot log in as DB.
+- Server-side per-account virtual workspaces and JSON index, with read/list/new directory/chunked writes (16 MiB max).
+- Remote MDI Open/Save As and print dialogs, per-application file filters, My Documents desktop icon and virtual explorer placeholder.
+- Updated Notepad and WordPad signed `.cpy` modules to use session-authenticated virtual filesystem rather than native local QFileDialog in RDP mode.
+- Added high-contrast check/radio indicators for the dark theme.
+- 253 automated tests passing. Native Windows ACL, GUI and print testing outstanding.
+
+## v0.5.6 (2026-10-27)
+
+- Replaced sample Notepad with full client-side Qt5 plain text MDI editor, file save/open, encoding/BOM preservation, find/replace, status and printing.
+- Added WordPad as signed `.cpy` remote MDI application: QTextEdit Rich Text, formatting toolbar, images, lists, HTML/TXT/partial RTF support, basic ODT import and Qt ODF export.
+- Added `wordpad` to server allowlist, signed package mapping and Programs → Accessories JSON Start menu.
+- Adjusted initial MDI sizes for editors; existing taskbar and minimize/restore support unchanged.
+- 243 automatic tests passed (including 11 new editor/format/signature checks); Qt5 visual test remains outstanding.
+
+## v0.5.5 (2026-10-27)
+
+- Desktop icon and 48x48 snap grid now live in a dedicated transparent DesktopIconLayer beneath ALL QMdiSubWindow applications.
+- Removed viewport-level icon/grid promotion that could draw desktop icons over application windows.
+- Added nearest-free-cell drop placement: visible MDI window rectangles are avoided when snapping desktop icons.
+- Layer stays below MDI subwindows through resize and subwindow activation; taskbar remains above work area.
+- No server protocol, account database, or signed .cpy module changes.
+- 232 automated tests (224 existing + 8 new) passed; native Qt5 visual verification pending.
+
+## v0.5.4 (2026-10-27)
+
+- Replaced basic two-number Calculator example with full classic-inspired Qt5 MDI Calculator.
+- Standard/Scientific/Programmer modes with Decimal core, memory, repeat equals, trig/log/powers/factorial, and signed integer word sizes/bitwise operations.
+- Calculator menus, keyboard shortcuts, copy/paste, history, mathematical error feedback, original Win95/XP-style palette.
+- Kept signed server->client .cpy transfer and Ed25519 key pinning; separated compressed ZIP bound (32 KiB) from total uncompressed member bound (128 KiB).
+- Adjusted calculator MDI initial geometry for visibility over the emulated taskbar.
+- cryptography requirement now accepts v50 (e.g. Python 3.15 user installation) without downgrading.
+- 224 automated tests passing; native Qt5 visual test remains outstanding.
+
 ## v0.5.3 (2026-10-26)
 
 - WinXP GUI workspace with an original painter-generated blue sky and green hill background; Win95 teal unchanged.

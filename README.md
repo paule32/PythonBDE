@@ -1,8 +1,164 @@
 # PythonBDE – Qt5-BDE-Server mit DBF-Benutzerverwaltung
 
-**Version 0.5.3** · eigenständige Erweiterung zu [paule32/PythonBDE](https://github.com/paule32/PythonBDE).
+![TLS-Verbindung zwischen RPC Client und BDE Server](img/screen0000.png)
+
+**Version 0.5.9** · eigenständige Erweiterung zu [paule32/PythonBDE](https://github.com/paule32/PythonBDE).
 Der beim Abruf verfügbare Repository-Text beschreibt das Projekt als „python based BDE server“.
 Die hier enthaltene Implementierung ist ein **neues, separates Grundmodul**; es wurde **nichts nach GitHub gepusht**.
+
+## Neu v0.5.9 – TLS-Vertrauenskette korrigiert
+
+Das fruehere TLS-Testzertifikat war ein selbstsigniertes Serverzertifikat (CA=False).
+Qt5 konnte dessen Herausgeber deshalb unter Umstaenden nicht verifizieren.
+`generate_tls_certificate.py` erzeugt jetzt eine private Root-CA (`ca.crt`, `ca.key`)
+und ein davon unterschriebenes Serverzertifikat (`server.crt`, `server.key`).
+Im Client **`ca.crt`**, nicht `server.crt` verwenden. Bei vorhandenen alten
+Zertifikaten erst sichern und dann die neuen Dateien erstellen; keine
+automatischen Ueberschreibungen. Siehe `TLS_SETUP.md`.
+
+## Neu v0.5.8 – integriertes TLS für den Server und den RPC-Client
+
+**In dieser Version ist der Netzwerktransport standardmäßig TLS-geschützt.**
+Siehe **[TLS_SETUP.md](TLS_SETUP.md)** für die Zertifikatsgenerierung und den
+Start auf Windows/Linux. Nach erfolgreicher Zertifikatsprüfung läuft die gesamte
+JSON-RPC-Verbindung einschließlich Passwort, RDP-Fenster, Startmenü, `.cpy`-Paketen
+und virtuellen Dateien über QSslSocket. Alte Abschnitte unten beschreiben
+**historische Versionsstände** und deren damalige Klartextbeschränkungen.
+
+Zum ersten Start zuerst `python generate_tls_certificate.py` ausführen;
+anschließend `python server.py` und den Client mit
+`python rpc_client.py --ca-cert certificates/ca.crt` starten.
+
+## Neuerungen v0.5.7 – RDP-/DB-Konten und virtueller Dateiserver
+
+Unter **Manager → Users → User Permissions** gibt es zwei sich gegenseitig
+abschließende RadioButtons **Use as RDP** und **Use as DB**. Der Typ steht in
+`ACCTYPE` in `users.dbf` (Werte `RDP` / `DB`), nicht im Passwort. Neue Konten
+sind zunächst RDP-Konten. Vorhandene DBF-Dateien im Schema v0.5.6 können
+weiter geöffnet werden; bestehende Konten gelten als RDP. **Vor dem ersten
+Schreiben bitte eine Sicherung der `users.dbf` anlegen**, da dabei das neue
+DBF-Schema mit `ACCTYPE` und `FSROOT` geschrieben wird.
+
+Beim Login ist der Kontotyp verbindlich: `systemMode` `win95`, `winXP` oder
+`con` erfordert RDP; für DB-Konten ist `systemMode: "db"`, `display: null`
+vorgesehen. Beim DB-Login wird kein `CreateWindow` gesendet. Die eigentliche
+DB-Tabellen-RPC-Engine ist **noch nicht** implementiert. Die existierenden
+20-/60-Sekunden-Login-Regeln bleiben bestehen.
+
+Der RDP-Dateiserver verwaltet ein privates Benutzerverzeichnis neben
+`users.dbf` unter `user_data/<FSROOT>/`. `FSROOT` ist eine zufällige 32-stellige
+hexadezimale Verzeichniskennung und wird **nicht** an Clients übertragen.
+Eine serverseitige `filesystem.json` ist der autoritative virtuelle Index.
+Die Startverzeichnisse `My Documents` und `Desktop` werden beim Anlegen eines
+RDP-Kontos beziehungsweise vor dem ersten RDP-Login erstellt. Die Serverdateien
+werden unter Linux mit `0700`/`0600`, unter Windows nach erfolgreicher
+`icacls`-Zugriffsbeschränkung verarbeitet (bei ACL-Fehler Abbruch). Entfernte
+Konten hinterlassen ihre Daten zunächst zur manuellen administrativen Sicherung;
+neu angelegte Konten mit identischem Namen erhalten einen **anderen** FSROOT.
+
+Neue, nur nach erfolgreichem RDP-Login zulässige JSONL-Befehle:
+
+```json
+{"action":"vfs_list", "path":"My Documents"}
+{"action":"vfs_mkdir", "path":"My Documents/Briefe"}
+{"action":"vfs_read", "path":"My Documents/Briefe/a.txt", "offset":0}
+{"action":"vfs_begin", "path":"My Documents/Briefe/a.txt"}
+{"action":"vfs_chunk", "content":"<base64>"}
+{"action":"vfs_commit"}
+{"action":"vfs_abort"}
+```
+
+Der Server prüft die angemeldete Sitzung und die aktuellen Rechte bei **jeder**
+Dateianfrage: `READ` zum Auflisten/Lesen, `WRITE` für neue Dateien/Ordner,
+`MODIFY` zum Überschreiben (Admin darf beides). Namen mit `..`, absoluten
+Pfaden oder Windows-Laufwerksbezeichnern sowie Symlinks werden abgelehnt;
+Dateien außerhalb des Index können nicht gelesen werden. Die Übertragung
+verwendet Base64-Blöcke bis 20 KiB und maximal 16 MiB pro Datei.
+
+Im RPC-Client wird der Datei-Dialog als `QMdiSubWindow` **innerhalb des
+Arbeitsfensters** angezeigt: links `My Documents`/`Desktop`, rechts Dateitabelle,
+Navigation und `New Folder`, darunter Pfadeingabe und Filter je Anwendung.
+Notepad/WordPad lesen/schreiben über diesen JSON-RPC-Dienst statt über ihre
+bisherigen lokalen `QFileDialog`-Pfade. WordPad druckt formatierten Inhalt
+über einen internen Drucker-Auswahldialog; die About-Fenster sind ebenfalls
+interne MDI-Fenster. Zusätzlich öffnet das verschiebbare **My Documents**-Icon
+links oben eine erste Explorer-Ansicht. Das verschiebbare Disconnect-Icon wird
+rechts oben platziert. Beide bleiben in der Desktop-Ebene hinter Modulfenstern.
+
+**Wichtige Sicherheitsgrenzen:** Ein RDP-Server-Dateisystem schützt die Dateien
+gegen nicht autorisierte **Protokollanfragen**, stellt aber **keine Sandbox**
+für den signierten, auf dem Client ausgeführten Python-Code dar. Andere
+Prozesse mit derselben Betriebssystemidentität wie der Server können trotz
+privater Dateirechte lokal Zugriff haben. Für LAN-Verbindungen unbedingt
+TLS/VPN einsetzen: auch die Datei-Inhalte und Metadaten sind derzeit nicht
+durch Ende-zu-Ende-TLS geschützt. Windows-NTFS-ACLs, echtes Qt5-MDI-Verhalten
+und die Druckausgabe müssen nativ getestet werden.
+
+**Tests:** 253 automatisierte Tests unter Linux; inklusive 10 neuer Tests für
+virtuelle Verzeichnisse/Dateien, Pfadvalidierung, Benutzerisolation,
+DBF-Rückwärtskompatibilität und den DB-/RDP-Protokollmarker.
+
+## Neuerungen v0.5.6 – Notepad und WordPad als Remote-Anwendungen
+
+Der bisherige Notepad-Dummy wurde durch einen eigenständigen **QPlainTextEdit**-
+Texteditor ersetzt. **WordPad** ist neu als zusätzliches freigegebenes Modul
+unter `Programs → Accessories → WordPad` verfügbar. Beide kommen **nicht** als
+native Windows-EXE-Dateien, sondern als vom Server kompiliertes, Ed25519-signiertes
+`.cpy`-Paket über die vorhandene `load_module`-RPC-Verbindung zum Client.
+
+- **Notepad:** File → New/Open/Save/Save As/Print/Exit, Edit → Undo/Redo,
+  Cut/Copy/Paste/Delete, Find/Find Next/Replace/Go To, Select All, Time/Date;
+  Format → Word Wrap/Font; View → Status Bar und Zoom. UTF-8, UTF-8-BOM,
+  UTF-16 BOM, CP1252-Fallback und bestehende CRLF/LF/CR-Zeilenenden.
+- **WordPad:** Rich-Text-Ansicht in QTextEdit mit ToolBar für Schriftart, Größe,
+  Fett/Kursiv/Unterstrichen/Durchgestrichen, Textfarbe, Ausrichtung sowie
+  Aufzählungen/Nummerierung. File → New/Open/Save/Save As/Print, Suche und
+  Ersetzen, Einfügen von Bildern sowie Datum/Uhrzeit. Unterstützte Formate:
+  `.rtf` (gängige Text-, Zeichen- und Absatzformatierung), `.html`, `.txt`;
+  `.odt`-Export via Qt, ODT-Import von Basistext.
+- **Dateien werden auf dem Clientrechner** über explizite Qt-Dateidialoge
+  geöffnet/gespeichert, nicht automatisch im Server-Datenverzeichnis.
+  Geänderte Dokumente lösen beim Schließen eine Speichern-Nachfrage aus.
+  Neue Dateien werden per temporärer Datei und `os.replace()` geschrieben
+  (bei ODT-Export verwendet Qt sein eigenes Schreibverfahren).
+- Module erscheinen in der bisherigen `QMdiArea`, besitzen automatisch einen
+  Taskleistenbutton und unterstützen Verschieben, Minimieren, Wiederherstellen
+  und Schließen. Für Notepad/WordPad wurde die anfängliche MDI-Geometrie größer.
+- Die Modul-Allowlist und der serverseitige JSON-Startmenübaum wurden um
+  `wordpad` erweitert. Signing, Sitzungsbindung und Paketobergrenzen bleiben
+  **unverändert**; ein neues Schlüsselpaar ist nicht erforderlich.
+
+**Grenzen:** Die RTF-Umsetzung ist keine komplette Microsoft-RTF-Engine. RTF-
+Export erhält grundlegende Zeichen-/Absatzformatierung, jedoch keine eingebetteten
+Bilder oder OLE-Objekte; bei Bildverlust erfolgt eine Warnung. Für Bilder im
+WordPad HTML speichern. ODT-Import übernimmt Basistext, nicht garantiert alle
+Formate. Die signierten Module laufen mit den Dateirechten des Clientprozesses;
+für fremde Module bietet `.cpy` keine Sandbox. Der Netzwerkverkehr sollte
+vollständig durch TLS/VPN abgesichert werden.
+
+**Tests:** 243 automatisierte Tests (232 bisherige plus 11 Editor-Tests)
+unter Linux; die Ausführung der Qt5-MDI-Oberflächen auf Windows/Linux ist
+weiterhin durch einen nativen GUI-Test zu bestätigen.
+
+## Neuerungen v0.5.5 – Desktop-Icons hinter Anwendungsfenstern
+
+- Die Desktop-Icons und das 48×48-Einrastraster sind nun **Kinder einer
+  transparenten `DesktopIconLayer`**, die im `QMdiArea`-Viewport dauerhaft
+  **unterhalb sämtlicher `QMdiSubWindow`-Anwendungsfenster** liegt.
+- Ein Icon wird auch während des Ziehens nicht mehr über Modulfenster angehoben.
+  Nur das Icon innerhalb seiner Desktop-Ebene darf in den Vordergrund.
+- Beim Ablegen wird möglichst die nächste **nicht von einem geöffneten
+  Anwendungsfenster verdeckte Rasterposition** gewählt (48×48-Raster).
+  Sind alle Rasterpositionen verdeckt, bleibt das Icon auf der Desktop-Ebene
+  hinter den Fenstern, statt über ihnen zu erscheinen.
+- Das Raster wird nur beim Ziehen angezeigt, liegt ebenfalls hinter MDI-Fenstern,
+  und wird bei einer Änderung der Desktop-/Viewportgröße mit angepasst.
+- MDI-Fenster lassen sich weiterhin verschieben, minimieren und wiederherstellen.
+  Die Taskleiste bleibt unverändert ganz vorne. Das RPC-Protokoll und die
+  Benutzerverwaltung werden nicht verändert.
+- Tests: Geometrie der Rasterablage, belegte Rasterflächen, maximale Fenster,
+  Qt-Ebenenhierarchie und bestehende Regressionstests. Ein echter Qt5-Sichttest
+  unter Windows/Linux steht noch aus.
 
 ## Neuerungen v0.5.2 – klassischer Windows-95-Desktop
 
@@ -887,6 +1043,42 @@ The Qt theme toggle does not override the emulated desktop wallpaper.
 - Emulated Start menu and taskbar always remain inside the workspace, rather
   than changing the native operating system desktop.
 
+
+### Calculator v0.5.4: klassischer Rechner als signiertes Remote-Modul
+
+Der bisherige Zwei-Zahlen-Demorechner wurde vollständig durch eine
+**eigenständige Calculator-Anwendung** ersetzt. Start unverändert über
+**Programs → Accessories → Calculator** (Win95/WinXP) im RPC-Arbeitsfenster.
+Der Server kompiliert `pythonbde/remote_apps/calculator.py` in ein signiertes
+`.cpy`-Paket; der Client führt es nach erfolgreicher Signaturprüfung als
+bewegliches, minimierbares MDI-Fenster aus. Ein neuer Schlüssel oder eine
+Änderung an `start_menu.py` ist nicht notwendig.
+
+- **View → Standard:** Dezimalrechnen (Decimal), `+ - × ÷`, `%`, `√`,
+  `x²`, `x³`, `1/x`, Vorzeichen, Rücktaste, `CE`, `C`, wiederholtes `=`.
+- **View → Scientific:** DEG/RAD/GRAD, `sin/cos/tan`, inverse und
+  hyperbolische Funktionen, `ln`, `log`, `exp`, `10^x`, `2^x`, `x^y`,
+  Fakultät, Konstanten π/e und Modulo. Trigonometrie nutzt wie Python
+  `math` Fließkomma-Näherungen; Dezimal-Grundrechnen verwendet `Decimal`.
+- **View → Programmer:** BIN/OCT/DEC/HEX, BYTE/WORD/DWORD/QWORD,
+  bitweise AND/OR/XOR/NOT, Shiftoperationen und vorzeichenbehaftete
+  Wortbreiten.
+- **Edit → Copy/Paste**, **View → History** (letzte 100 Berechnungen),
+  `MC/MR/MS/M+/M-`, Tastatureingabe, Fehlerbehandlung (z. B. Division
+  durch null) ohne Abbruch der gesamten Client-Anwendung.
+
+Das Modul hat keine Qt-Abhängigkeiten beim Import; PyQt5 wird erst beim
+`create_widget()` benötigt. Dadurch können die mathematischen Kernfunktionen
+unter Linux ohne grafische Oberfläche getestet werden. Die ältere 32-KiB-Grenze
+für das **komprimierte** `.cpy`-Paket bleibt unverändert; entpackte signierte
+ZIP-Einträge haben jetzt ein separat geprüftes Gesamtlimit von 128 KiB.
+
+**Grenzen:** Der Rechner ist eine eigenständige, klassische Nachbildung und
+keine pixelgenaue Microsoft-Calc-Kopie. Es fehlen beispielsweise komplexe
+Klammerausdrücke, Währungsumrechnungen und Einheitenkonvertierungen. Der
+Bytecode wird auf Server und Client mit derselben CPython-Minor-Version
+benötigt. `.cpy`-Signaturen beweisen Herkunft, sind jedoch keine Sandbox.
+
 ### Running remote-compiled Python modules (.cpy)
 
 PythonBDE supports a small signed `.cpy` format: a ZIP container with
@@ -914,7 +1106,8 @@ versions are rejected.
    independently verified public PEM file.
 4. Start the server (`python server.py`) and client (`python rpc_client.py`).
    Log in (respecting the existing 20/60-second login policies), choose Win95
-   or WinXP, then choose **Programs → Accessories → Notepad** or
+   or WinXP, then choose **Programs → Accessories → Notepad**,
+   **Programs → Accessories → WordPad** or
    **Programs → Accessories → Calculator**. The server compiles/signs the
    requested module; the client verifies it and creates a movable MDI window.
 5. Other enabled Start-menu leaves have safe *placeholder* `.cpy` modules

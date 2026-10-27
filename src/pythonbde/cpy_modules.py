@@ -24,16 +24,20 @@ import types
 import zipfile
 
 MAX_CPY_BYTES = 32 * 1024
+# Bytecode is more compressible than source; retain a distinct size limit
+# for uncompressed ZIP members (never trust the compressed size alone).
+MAX_CPY_MEMBER_BYTES = 128 * 1024
 MAX_CPY_EVENT_BYTES = 60 * 1024
 MODULE_TITLES = {
-    'notepad': 'Notepad', 'calculator': 'Calculator',
+    'notepad': 'Notepad', 'wordpad': 'WordPad', 'calculator': 'Calculator',
     'msdos': 'MS-DOS Prompt', 'explorer': 'Windows Explorer',
     'control-panel': 'Control Panel', 'printers': 'Printers',
     'find-files': 'Find Files', 'help': 'Help',
     'run': 'Run', 'shutdown': 'Shut Down',
 }
 MODULE_FILES = {key: ('notepad.py' if key == 'notepad' else
-                      'calculator.py' if key == 'calculator' else 'placeholder.py')
+                      'calculator.py' if key == 'calculator' else
+                      'wordpad.py' if key == 'wordpad' else 'placeholder.py')
                 for key in MODULE_TITLES}
 MODULE_IDS = frozenset(MODULE_FILES)
 ID_RE = re.compile(r'^[a-z][a-z0-9_-]{0,31}$')
@@ -182,7 +186,8 @@ def verify_and_load(event: dict, public_key_path) -> tuple[dict, types.ModuleTyp
     with zipfile.ZipFile(io.BytesIO(package)) as archive:
         if set(archive.namelist()) != {'manifest.json', 'module.pyc'}:
             raise ValueError('Unexpected .cpy contents')
-        if any(i.file_size > MAX_CPY_BYTES for i in archive.infolist()):
+        if any(i.file_size > MAX_CPY_MEMBER_BYTES or i.file_size < 0
+               for i in archive.infolist()) or sum(i.file_size for i in archive.infolist()) > MAX_CPY_MEMBER_BYTES:
             raise ValueError('Invalid .cpy member size')
         manifest = json.loads(archive.read('manifest.json').decode('utf-8'))
         pyc = archive.read('module.pyc')

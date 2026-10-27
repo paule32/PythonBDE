@@ -1,4 +1,4 @@
-"""Qt5 TCP/JSON-Lines Protokoll; Fernzugriff ausschließlich in geschützten Netzen/TLS-Proxy."""
+"""PythonBDE Qt5 TLS/JSON-Lines RPC-Protokoll für Desktop, Module und virtuelle Dateien."""
 from __future__ import annotations
 
 import json
@@ -8,7 +8,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal
-from PyQt5.QtNetwork import QHostAddress, QTcpServer, QUdpSocket
+from PyQt5.QtNetwork import QHostAddress, QUdpSocket
 
 from .discovery import create_probe, decode, discover_existing, network_interfaces, broadcast_targets, MAGIC
 from .settings import DISCOVERY_PORT
@@ -20,6 +20,9 @@ from .blocking import BlockingRegistry, DuplicateLoginGuard, ReLoginIntervalGuar
 from .windows_secrets import ServerSecrets, make_nonce
 from .start_menu import serialized_temporary_menu
 from .cpy_modules import ModuleSigner, MODULE_IDS, ID_RE
+from .virtual_fs import VirtualFS, VirtualFileError
+from .tls_transport import TLSTcpServer
+from .tls_security import resolve_certificate_file
 
 MAX_LINE = 64 * 1024
 MAX_QUEUE = 128 * 1024
@@ -42,6 +45,7 @@ class BDEServer(QObject):
     def __init__(self, users: UserManager, parent=None):
         super().__init__(parent)
         self.users = users
+        self.virtual_fs = VirtualFS(users.store.path)
         self.aliases = AliasRegistry(users.store.path)
         self.blocking = BlockingRegistry(users.store.path)
         self.login_guard = DuplicateLoginGuard(20)
@@ -56,8 +60,11 @@ class BDEServer(QObject):
         self._dns_timer.start()
         self._dns_next_refresh = 0.0
         self.refresh_blocked_domains()
-        self.listener = QTcpServer(self)
+        self.listener = TLSTcpServer(self)
         self.listener.newConnection.connect(self._accepted)
+        self.listener.secureConnected.connect(self._register_socket)
+        self.listener.tlsFailure.connect(lambda message: self.audit.emit(400, message))
+        self.tls_enabled = True
         self.discovery = QUdpSocket(self)
         self.discovery.readyRead.connect(self._answer_discovery)
         self.clients = {}  # socket -> {buffer, username, logged_at, login_time}
@@ -97,9 +104,20 @@ class BDEServer(QObject):
         if time.monotonic() >= self._dns_next_refresh:
             self.refresh_blocked_domains()
 
-    def start(self, port: int = 43650, ip: str = "127.0.0.1", *, server_id: str = ""):
+    def start(self, port: int = 43650, ip: str = "127.0.0.1", *, server_id: str = "",
+              tls_enabled=True, tls_certificate="certificates/server.crt",
+              tls_private_key="certificates/server.key"):
+        from .settings import application_dir
         if self.listener.isListening():
             return True
+        if not tls_enabled and ip != "127.0.0.1":
+            raise ValueError("Unverschlüsselte Verbindungen sind ausschließlich auf Loopback erlaubt")
+        if tls_enabled:
+            certificate = resolve_certificate_file(tls_certificate, application_dir())
+            private_key = resolve_certificate_file(tls_private_key, application_dir())
+            self.listener.configure(True, str(certificate), str(private_key))
+        else:
+            self.listener.configure(False)
         if not 1024 <= port <= 65535:
             raise ValueError("Port außerhalb des gültigen Bereichs")
         addr = QHostAddress(ip)
@@ -127,10 +145,12 @@ class BDEServer(QObject):
             self.listener.close()
             raise
         self.refresh_blocked_domains()
+        self.tls_enabled = bool(tls_enabled)
         self.server_id = identity
         self.bind_ip = ip
         self.started_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        self.message.emit(f"Server gestartet: {ip}:{self.listener.serverPort()} (ID {identity})")
+        self.message.emit(f"Server gestartet: {ip}:{self.listener.serverPort()} (ID {identity}; "
+                          f"{'TLS' if tls_enabled else 'LOOPBACK PLAINTEXT'})")
         self.audit.emit(200, f"Server started: {ip}:{port}")
         self.status_changed.emit()
         return True
@@ -139,6 +159,7 @@ class BDEServer(QObject):
         self.discovery.close()
         self.listener.close()
         for sock, state in list(self.clients.items()):
+            self.virtual_fs.abort(state.pop('vfs_upload')) if state.get('vfs_upload') else None
             # Remove state BEFORE closing the socket. The Qt disconnected signal
             # may be synchronous; _gone() must not log the same session twice.
             self.clients.pop(sock, None)
@@ -326,19 +347,35 @@ class BDEServer(QObject):
         return result
 
     def _accepted(self):
+        """Nur für ausdrücklich konfigurierte unverschlüsselte Loopback-Sitzungen."""
         while self.listener.hasPendingConnections():
             sock = self.listener.nextPendingConnection()
-            self._next_session += 1
-            self.clients[sock] = {"buffer": bytearray(), "username": None, "logged_at": 0, "login_time": "",
-                                  "session_id": f"session-{self._next_session}",
-                                  "peer": sock.peerAddress().toString(), "peer_port": sock.peerPort(), "aliases": set(),
-                                  "last_username": None, "disconnect_reason": None,
-                                  "disconnect_logged": False,
-                                  "rpc_pending": None, "rpc_status": "idle", "rpc_error_code": None, "hello_nonce": None,
-                                  "system_mode": "winXP", "client_display": None}
-            sock.readyRead.connect(lambda s=sock: self._read(s))
-            sock.disconnected.connect(lambda s=sock: self._gone(s))
-            self.status_changed.emit()
+            self._register_socket(sock)
+
+    def _register_socket(self, sock):
+        # Niemals ein unbekanntes, noch unverschlüsseltes Socket in den
+        # TLS-Betrieb übernehmen (kein Klartext-Fallback).
+        encrypted = bool(getattr(sock, "isEncrypted", lambda: False)())
+        if self.listener.tls_enabled and not encrypted:
+            sock.abort()
+            return
+        self._next_session += 1
+        self.clients[sock] = {"buffer": bytearray(), "username": None, "logged_at": 0, "login_time": "",
+                              "session_id": f"session-{self._next_session}",
+                              "peer": sock.peerAddress().toString(), "peer_port": sock.peerPort(), "aliases": set(),
+                              "last_username": None, "disconnect_reason": None,
+                              "disconnect_logged": False,
+                              "rpc_pending": None, "rpc_status": "idle", "rpc_error_code": None, "hello_nonce": None,
+                              "system_mode": "winXP", "client_display": None, "tls_encrypted": encrypted}
+        if encrypted:
+            self.audit.emit(200, f"TLS session established: {self.clients[sock]['session_id']} "
+                                  f"from {self.clients[sock]['peer']} "
+                                  f"cipher={sock.sessionCipher().name()}")
+        sock.readyRead.connect(lambda s=sock: self._read(s))
+        sock.disconnected.connect(lambda s=sock: self._gone(s))
+        if encrypted:
+            QTimer.singleShot(0, lambda s=sock: self._read(s) if s in self.clients and s.bytesAvailable() else None)
+        self.status_changed.emit()
 
     def _log_connection_closed(self, state, *, reason=None):
         """Record exactly one disconnect event per TCP session.
@@ -361,12 +398,16 @@ class BDEServer(QObject):
         state = self.clients.pop(sock, None)
         if state is None:
             return  # Already handled by stop(), or a duplicate Qt signal.
+        self.virtual_fs.abort(state.pop('vfs_upload')) if state.get('vfs_upload') else None
         self._log_connection_closed(state)
         sock.deleteLater()
         self.status_changed.emit()
 
     def _send(self, sock, data):
         if sock.state() == sock.UnconnectedState:
+            return
+        if self.listener.tls_enabled and not getattr(sock, "isEncrypted", lambda: False)():
+            sock.abort()
             return
         encoded = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n"
         sock.write(encoded)
@@ -417,6 +458,9 @@ class BDEServer(QObject):
         return {"rpc_ack": True, "client": state["session_id"], "lastErrorCode": code}
 
     def _read(self, sock):
+        if self.listener.tls_enabled and not getattr(sock, "isEncrypted", lambda: False)():
+            sock.abort()
+            return
         state = self.clients.get(sock)
         if state is None:
             return
@@ -502,6 +546,11 @@ class BDEServer(QObject):
         if b"\n" in state["buffer"] and sock in self.clients:
             QTimer.singleShot(0, lambda s=sock: self._process_pending(s))
 
+    def _abort_upload(self, state):
+        upload = state.pop('vfs_upload', None)
+        if upload:
+            self.virtual_fs.abort(upload)
+
     def _dispatch(self, state, req):
         action = req.get("action")
         if action == "hello":
@@ -510,18 +559,22 @@ class BDEServer(QObject):
             nonce = make_nonce()
             state["hello_nonce"] = nonce
             result = {"platform": platform.system(), "nonce": nonce,
-                      "passwordTransport": "plaintext-warning", "version": "0.5.3"}
-            if getattr(self, 'windows_secrets', None) is not None:
+                      "passwordTransport": "TLS" if state.get("tls_encrypted") else "plaintext-warning",
+                      "tls": bool(state.get("tls_encrypted")), "version": "0.5.8"}
+            if not state.get("tls_encrypted") and getattr(self, 'windows_secrets', None) is not None:
                 result.update(self.windows_secrets.hello_fields())
             return result
         if action == "ping":
-            return {"name": "PythonBDE", "version": "0.5.3", "protocol": "jsonl/1",
+            return {"name": "PythonBDE", "version": "0.5.8", "protocol": "jsonl/1",
                     "server_id": self.server_id}
         if action == "login":
             from pythonbde.emulation import validate_client_display
-            system_mode, client_display = validate_client_display(
-                req.get("systemMode"), req.get("display")
-            )
+            if req.get('systemMode') == 'db' and req.get('display') is None:
+                system_mode, client_display = 'db', None
+            else:
+                system_mode, client_display = validate_client_display(
+                    req.get("systemMode"), req.get("display")
+                )
             name = req.get("username", "")
             # Both-Windows clients must use the DPAPI-protected server RSA key;
             # legacy and non-Windows clients remain interoperable after an
@@ -539,7 +592,7 @@ class BDEServer(QObject):
                     raise AuthError("Passwortentschlüsselung fehlgeschlagen") from exc
             else:
                 state.pop("hello_nonce", None)
-                if getattr(self, 'windows_secrets', None) is not None:
+                if not state.get("tls_encrypted") and getattr(self, 'windows_secrets', None) is not None:
                     # Fail closed for legacy/unidentified clients on a Windows
                     # server. Mixed-OS clients must explicitly opt in after
                     # displaying the plaintext warning in their UI.
@@ -571,12 +624,16 @@ class BDEServer(QObject):
             if user is None:
                 self.audit.emit(400, "Login failed")
                 raise AuthError("Anmeldung fehlgeschlagen")
+            account_type = user.get('ACCTYPE', 'RDP')
+            if (account_type == 'DB') != (system_mode == 'db'):
+                raise LoginRejected('Account type is not enabled for this client mode', 403)
             if existing:
                 # Re-Authentifizierung derselben TCP-Verbindung ist zulässig.
                 # Die Verbindung wird bei konkurrierenden Logins nie gekickt.
                 state.update(system_mode=system_mode, client_display=client_display,
-                             _rpc_on_login=True)
-                return {**user, "systemMode": system_mode, "display": client_display}
+                             _rpc_on_login=(system_mode != 'db'))
+                return {**user, "systemMode": system_mode, "display": client_display,
+                        "accountType": account_type}
             if guard is not None:
                 conflict, seconds = guard.check(name, state, self.clients.values(), SESSION_TTL)
                 if conflict:
@@ -593,17 +650,21 @@ class BDEServer(QObject):
                 if seconds:
                     self.audit.emit(400, f"Relogin rejected: user={name}, wait={seconds}s")
                     raise LoginRejected(f'Erneute Anmeldung erst in {seconds} Sekunden möglich', 429, seconds)
+            # Prepare protected workspace BEFORE session becomes authenticated.
+            if system_mode != 'db' and getattr(self, 'virtual_fs', None) is not None:
+                self.virtual_fs.workspace(self.users.get(name))
             state.update(username=user["USERNAME"].casefold(), last_username=user["USERNAME"],
                          disconnect_reason=None, logged_at=time.monotonic(),
                          login_time=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"), aliases=set(),
                          rpc_pending=None, rpc_status="idle", rpc_error_code=None,
                          system_mode=system_mode, client_display=client_display,
-                         _rpc_on_login=True)
+                         _rpc_on_login=(system_mode != 'db'))
             self.status_changed.emit()
             if relogin is not None:
                 relogin.record_success(user["USERNAME"])
             self.audit.emit(200, f"User logged in: {user['USERNAME']} (mode={system_mode})")
-            return {**user, "systemMode": system_mode, "display": client_display}
+            return {**user, "systemMode": system_mode, "display": client_display,
+                    "accountType": account_type}
         if action == 'load_module':
             # Client-provided module IDs are never converted into file paths.
             # Signed bytecode is available only after an authenticated GUI login.
@@ -619,6 +680,7 @@ class BDEServer(QObject):
             state['_module_on_request'] = {'moduleId': module_id, 'requestId': request_id}
             return {'moduleQueued': True, 'moduleId': module_id, 'requestId': request_id}
         if action == "logout":
+            self.virtual_fs.abort(state.pop('vfs_upload')) if state.get('vfs_upload') else None
             username = state.get("username")
             state.update(username=None, logged_at=0, login_time="", aliases=set(),
                          rpc_pending=None, disconnect_reason="logout")
@@ -634,6 +696,47 @@ class BDEServer(QObject):
         if not current or current["LOCKUSER"] or (parse_time(current["EXPIRE"]) and utcnow() > parse_time(current["EXPIRE"])):
             state.update(username=None, logged_at=0, login_time="", aliases=set())
             raise AuthError("Konto gesperrt/abgelaufen")
+        if action.startswith('vfs_'):
+            if state.get('system_mode') not in ('win95', 'winXP') or current.get('ACCTYPE') != 'RDP':
+                raise AuthError('RDP account required for virtual files')
+            if action in ('vfs_list', 'vfs_read') and not (current['READ'] or current['ADMIN']):
+                raise AuthError('Read permission required')
+            if action in ('vfs_mkdir', 'vfs_begin', 'vfs_chunk', 'vfs_commit', 'vfs_abort') and not (
+                    current['WRITE'] or current['MODIFY'] or current['ADMIN']):
+                raise AuthError('Write permission required')
+            if action == 'vfs_list':
+                return self.virtual_fs.list_dir(current, req.get('path', 'My Documents'))
+            if action == 'vfs_mkdir':
+                result = self.virtual_fs.mkdir(current, req.get('path'))
+                self.audit.emit(200, f"Virtual directory created: user={current['USERNAME']}")
+                return result
+            if action == 'vfs_read':
+                return self.virtual_fs.read(current, req.get('path'), req.get('offset', 0))
+            if action == 'vfs_begin':
+                self.virtual_fs.abort(state.pop('vfs_upload')) if state.get('vfs_upload') else None
+                path = req.get('path')
+                root, _, data = self.virtual_fs.workspace(current)
+                exists = path in data['entries']
+                if exists and not (current['MODIFY'] or current['ADMIN']):
+                    raise AuthError('Modify permission required to overwrite files')
+                if not exists and not (current['WRITE'] or current['ADMIN']):
+                    raise AuthError('Write permission required to create files')
+                state['vfs_upload'] = self.virtual_fs.begin_upload(current, path, overwrite=exists)
+                return {'started': True}
+            if action == 'vfs_chunk':
+                upload = state.get('vfs_upload')
+                if not upload: raise VirtualFileError('No file upload in progress')
+                return self.virtual_fs.write_chunk(upload, req.get('content'))
+            if action == 'vfs_commit':
+                upload = state.pop('vfs_upload', None)
+                if not upload: raise VirtualFileError('No file upload in progress')
+                result = self.virtual_fs.commit(current, upload)
+                self.audit.emit(200, f"Virtual document saved: user={current['USERNAME']}")
+                return result
+            if action == 'vfs_abort':
+                self.virtual_fs.abort(state.pop('vfs_upload')) if state.get('vfs_upload') else None
+                return {'aborted': True}
+            raise ValueError('Unknown filesystem operation')
         if action == "rpc_result":
             return self._receive_rpc_result(state, req)
         if action == "whoami":
@@ -672,18 +775,21 @@ class BDEServer(QObject):
             result = self.users.create(username, req.get("password"), req.get("rights", {}),
                                        lock_user=req.get("lock_user", False),
                                        count_pass=req.get("count_pass", 5),
-                                       count_limit=req.get("count_limit", 15), expire=req.get("expire", ""))
+                                       count_limit=req.get("count_limit", 15), expire=req.get("expire", ""),
+                                       account_type=req.get("account_type", "RDP"))
         elif action == "edit_user":
             result = self.users.edit(username, password=req.get("password"),
                                      rights=req.get("rights"), lock_user=req.get("lock_user"),
                                      count_pass=req.get("count_pass"), count_limit=req.get("count_limit"),
-                                     expire=req.get("expire"))
+                                     expire=req.get("expire"), account_type=req.get("account_type"))
         elif action == "delete_user":
             self.users.delete(username)
             result = {"deleted": True}
         else:
             self.users.unlock(username)
             result = {"unlocked": True}
+        if action == 'create_user' and result.get('ACCTYPE') == 'RDP':
+            self.virtual_fs.workspace(self.users.get(username))
         self.revoke_sessions(username)
         self.changed.emit()
         self.note_action({"create_user": "Insert Record", "edit_user": "Modify Record",

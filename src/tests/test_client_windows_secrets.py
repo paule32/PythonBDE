@@ -72,10 +72,11 @@ class WindowsEnvelopeTests(unittest.TestCase):
 
     def test_client_hello_precedes_password(self):
         self.assertIn('self._send("hello", clientPlatform=platform.system())', CLIENT)
-        self.assertIn('passwordSecret=envelope', CLIENT)
-        self.assertIn('Warning: Plain Password connection !', CLIENT)
-        self.assertIn('QMessageBox.Ok | QMessageBox.Cancel', CLIENT)
-        self.assertIn('Serverkennung geändert oder Verschlüsselung herabgestuft', CLIENT)
+        self.assertIn('QSslSocket', CLIENT)
+        self.assertIn('connectToHostEncrypted(', CLIENT)
+        self.assertIn('setPeerVerifyMode(QSslSocket.VerifyPeer)', CLIENT)
+        self.assertIn('info.get("tls") is not True', CLIENT)
+        self.assertNotIn('ignoreSslErrors(', CLIENT)
 
     def test_hello_challenge_and_envelope_in_server(self):
         self.assertIn('state["hello_nonce"] = nonce', SERVER)

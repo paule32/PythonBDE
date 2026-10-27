@@ -4,16 +4,16 @@
 
 ```text
 +---------------------------+  lokale IPC  +------------------------------------+
-| Programm A (.prg/.wfm)    |<----------->| PythonBDE Dienst (Windows/Linux)  |
-| Qt5 Login UI + BDE client |             | Sessions / ACL / Lock Manager      |
-+---------------------------+             | DBF Reader/Writer + SQL Engine     |
-                                          | Whitelisted DBF-Verzeichnisse      |
-+---------------------------+  lokale IPC |                                    |
-| Programm B (.prg/.wfm)    |<----------->|                                    |
-+---------------------------+             +------------------------------------+
+| Programm A (.prg/.wfm)    |<------------>| PythonBDE Dienst (Windows/Linux)   |
+| Qt5 Login UI + BDE client |              | Sessions / ACL / Lock Manager      |
++---------------------------+              | DBF Reader/Writer + SQL Engine     |
+                                           | Whitelisted DBF-Verzeichnisse      |
++---------------------------+  lokale IPC  |                                    |
+| Programm B (.prg/.wfm)    |<------------>|                                    |
++---------------------------+              +------------------------------------+
 
-+---------------------------+  Admin IPC              |
-| Qt5 PythonBDE Verwaltung |<-------------------------+
++---------------------------+  Admin IPC               |
+| Qt5 PythonBDE Verwaltung  |<-------------------------+
 +---------------------------+
 ```
 

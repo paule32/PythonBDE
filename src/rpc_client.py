@@ -10,17 +10,19 @@ import argparse
 import json
 import platform
 import sys
+import os
+from pathlib import Path
 from collections import deque
 from datetime import datetime
 
-from PyQt5.QtCore import Qt, QTimer, QPoint, pyqtSignal
-from PyQt5.QtNetwork import QAbstractSocket, QTcpSocket
+from PyQt5.QtCore import Qt, QTimer, QPoint, QEvent, pyqtSignal
+from PyQt5.QtNetwork import QAbstractSocket, QSslSocket, QSslCertificate, QSsl
 from PyQt5.QtWidgets import (
     QApplication, QComboBox, QDialog, QFormLayout, QGroupBox,
     QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
     QPlainTextEdit, QPushButton, QRadioButton, QVBoxLayout, QWidget, QToolBar,
     QTabWidget, QSpinBox, QButtonGroup, QGridLayout, QMenu,
-    QMdiArea, QMdiSubWindow, QFrame,
+    QMdiArea, QMdiSubWindow, QFrame, QFileDialog,
 )
 from PyQt5.QtGui import QPainter, QColor, QPen, QBrush, QLinearGradient, QFont, QFontMetrics, QIcon, QPixmap, QPainterPath
 from PyQt5.QtCore import QSize, QRect
@@ -34,6 +36,8 @@ from pythonbde.rpc import (
 from pythonbde.emulation import GUI_SIZES, TUI_SIZES, validate_client_display
 from pythonbde.start_menu import validate_menu
 from pythonbde.cpy_modules import verify_and_load, MODULE_IDS
+from pythonbde.remote_workspace import RemoteFiles
+from pythonbde.tls_security import CERT_ENV, validate_ca_bundle
 
 MAX_LINE = 64 * 1024
 MAX_BUFFER = 128 * 1024
@@ -65,6 +69,64 @@ def snapped_to_grid(x: int, y: int, width: int, height: int,
     max_y = max(0, height - DESKTOP_ICON_SIZE)
     return (max(0, min(round(x / grid) * grid, max_x)),
             max(0, min(round(y / grid) * grid, max_y)))
+
+
+def desktop_drop_position(glyph_x: int, glyph_y: int, desktop_width: int,
+                          desktop_height: int, occupied=(), *,
+                          icon_width: int = 96, icon_height: int = 78,
+                          glyph_width: int = DESKTOP_ICON_SIZE,
+                          grid: int = DESKTOP_GRID) -> tuple[int, int]:
+    """Find the nearest visible desktop grid cell not covered by an MDI window.
+
+    Return the *widget* top-left (the 48-pixel graphic is centered in its
+    96-pixel caption widget). The input rectangles are (x, y, width, height)
+    of visible application windows in desktop/viewport coordinates.
+
+    If there is no free cell (for example a maximized MDI window), retain a
+    bounded desktop position. The icon is still behind the MDI layer.
+    """
+    offset = max(0, (icon_width - glyph_width) // 2)
+    max_x = max(0, desktop_width - icon_width)
+    max_y = max(0, desktop_height - icon_height)
+    preferred_x = max(0, min(max_x, glyph_x - offset))
+    preferred_y = max(0, min(max_y, glyph_y))
+
+    # An icon's GRAPHIC starts on a grid line; its caption may be wider.
+    xs = [x - offset for x in range(0, max(0, desktop_width) + 1, grid)
+          if 0 <= x - offset <= max_x]
+    ys = list(range(0, max_y + 1, grid))
+    if not xs:
+        xs = [preferred_x]
+    if not ys:
+        ys = [preferred_y]
+    cells = [(x, y) for y in ys for x in xs]
+    cells.sort(key=lambda pt: ((pt[0] - preferred_x) ** 2 +
+                               (pt[1] - preferred_y) ** 2, pt[1], pt[0]))
+
+    def intersects(x, y, rectangle):
+        rx, ry, rw, rh = rectangle
+        return (x < rx + rw and x + icon_width > rx and
+                y < ry + rh and y + icon_height > ry)
+
+    for x, y in cells:
+        if not any(intersects(x, y, rectangle) for rectangle in occupied):
+            return x, y
+    # A maximized window can cover the whole desktop. We must never raise
+    # an icon over it just to keep the icon visible.
+    return preferred_x, preferred_y
+
+
+class DesktopIconLayer(QWidget):
+    """Transparent desktop-only layer; MDI subwindows always stack ABOVE it."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setObjectName('DesktopIconLayer')
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAutoFillBackground(False)
+        self.setGeometry(parent.rect())
+        self.show()
+        self.lower()  # Below all QMdiSubWindow siblings in the viewport.
 
 
 class DesktopGridOverlay(QWidget):
@@ -170,12 +232,61 @@ class DraggableCloseIcon(QWidget):
                 parent = self.parentWidget()
                 glyph_x = self.x() + (self.width()-self.SIZE)//2
                 x, y = snapped_to_grid(glyph_x, self.y(), parent.width(), parent.height())
-                self.move(max(0, min(parent.width()-self.width(), x-(self.width()-self.SIZE)//2)), y)
+                if hasattr(owner, 'place_desktop_icon') and getattr(owner, 'workspace', None) is not None:
+                    owner.place_desktop_icon(self, x, y)
+                else:
+                    self.move(max(0, min(parent.width()-self.width(), x-(self.width()-self.SIZE)//2)), y)
             self.update()
             event.accept()
             if clicked:
                 self.window().close()
 
+
+
+class MyDocumentsIcon(DraggableCloseIcon):
+    """Draggable 48px desktop shortcut to the remote document explorer."""
+    def __init__(self, parent, on_open):
+        super().__init__(parent)
+        self.on_open = on_open
+        self.setToolTip('My Documents – drag to move, click to open')
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        try:
+            p.setRenderHint(QPainter.Antialiasing, True)
+            x = (self.width()-48)//2
+            p.setPen(QPen(QColor('#E9F4FF'), 2))
+            p.setBrush(QColor('#376BAD'))
+            p.drawRoundedRect(x+3, 4, 43, 34, 3, 3)
+            p.setBrush(QColor('#87C7ED'))
+            p.drawRect(x+7, 8, 35, 24)
+            p.drawLine(x+23, 39, x+23, 43)
+            p.drawLine(x+13, 44, x+34, 44)
+            if self._pressed:
+                p.fillRect(QRect(x, 0, 48, 48), QColor(50,130,255,115))
+            p.setPen(QColor('#FFFFFF'))
+            p.setFont(QFont('Sans Serif', 9))
+            p.drawText(QRect(0,49,self.width(),27), Qt.AlignHCenter|Qt.AlignTop|Qt.TextWordWrap,'My Documents')
+        finally:
+            p.end()
+
+    def mouseReleaseEvent(self, event):
+        # Avoid the base close-window behavior, but keep all snap/grid logic.
+        if event.button() == Qt.LeftButton and self._press_global is not None:
+            clicked = not self._dragging
+            self._pressed = False
+            self._press_global = None
+            self.setCursor(Qt.OpenHandCursor)
+            owner = self.window()
+            owner.show_icon_grid(False)
+            if not clicked:
+                parent=self.parentWidget()
+                glyph_x=self.x()+(self.width()-self.SIZE)//2
+                x,y=snapped_to_grid(glyph_x,self.y(),parent.width(),parent.height())
+                owner.place_desktop_icon(self,x,y)
+            self.update()
+            event.accept()
+            if clicked: self.on_open()
 
 
 class RemoteDesktopHeader(QWidget):
@@ -440,6 +551,7 @@ class CreatedWindow(QWidget):
         self._dark_theme = False
         self.taskbar = None
         self.workspace = None
+        self.desktop_layer = None
         self.grid_overlay = None
         self._mdi_windows = {}
         self._tearing_down = False
@@ -479,22 +591,57 @@ class CreatedWindow(QWidget):
             self.workspace.setObjectName('RemoteMdiDesktop')
             self.workspace.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
             self.workspace.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-            self.grid_overlay = DesktopGridOverlay(self.workspace.viewport())
+            viewport = self.workspace.viewport()
+            self.desktop_layer = DesktopIconLayer(viewport)
+            self.grid_overlay = DesktopGridOverlay(self.desktop_layer)
+            self.grid_overlay.setGeometry(self.desktop_layer.rect())
+            # Always restore the icon-layer below ALL subwindows after the MDI
+            # activation/stack-order changes. Do not raise desktop icons on the
+            # viewport: that puts them in front of the user's app windows.
+            self.workspace.subWindowActivated.connect(self._keep_desktop_behind_windows)
+            viewport.installEventFilter(self)
             self._refresh_desktop_brush()
             self.taskbar = EmulatedTaskbar(mode, self)
             self.taskbar.start_clicked.connect(self.show_start_menu)
         self.close_icon = DraggableCloseIcon(self)
         # Desktop icons must be behind newly opened MDI windows, but above
         # the desktop background; the taskbar remains a separate top layer.
-        if self.workspace is not None:
-            self.close_icon.setParent(self.workspace.viewport())
-        self.close_icon.move(24, 0)
+        if self.desktop_layer is not None:
+            self.close_icon.setParent(self.desktop_layer)
+        self.close_icon.move(max(0, self.desktop_layer.width()-self.close_icon.width()-10)
+                             if self.desktop_layer is not None else 24, 0)
+        self.documents_icon = None
+        if self.desktop_layer is not None:
+            self.documents_icon = MyDocumentsIcon(self.desktop_layer, self.open_my_documents)
+            self.documents_icon.move(0, 0)
+            self.documents_icon.show()
         self.close_icon.show()
+        # raise_() only within DesktopIconLayer, NEVER against MDI windows.
         self.close_icon.raise_()
+        self._keep_desktop_behind_windows()
         # Existing v0.4.9 behaviour: window can shrink, but not exceed preset.
         self.setMinimumSize(120, 90)
         self.setMaximumSize(*geometry)
         self.resize(*geometry)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not getattr(self, '_desktop_icons_placed', False) and self.desktop_layer is not None:
+            self._desktop_icons_placed = True
+            QTimer.singleShot(0, self._place_initial_desktop_icons)
+
+    def _place_initial_desktop_icons(self):
+        if self.desktop_layer is not None and self.close_icon is not None:
+            self.close_icon.move(max(0, self.desktop_layer.width() - self.close_icon.width() - 10), 0)
+            if self.documents_icon is not None:
+                self.documents_icon.move(0, 0)
+            self._keep_desktop_behind_windows()
+
+    def open_my_documents(self):
+        # Supplied by the authenticated RPC client after the work area exists.
+        callback = getattr(self, 'open_documents_callback', None)
+        if callback is not None:
+            callback()
 
     def paintEvent(self, event):
         """Windows 95 paints a classic teal desktop regardless of Qt theme.
@@ -550,14 +697,58 @@ class CreatedWindow(QWidget):
             painter.end()
         self.workspace.setBackground(QBrush(picture))
 
+    def eventFilter(self, watched, event):
+        # QMdiArea owns the viewport, whose size may be changed by Qt AFTER
+        # the outer CreatedWindow.resizeEvent has finished.
+        if (self.workspace is not None and watched is self.workspace.viewport()
+                and event.type() == QEvent.Resize and self.desktop_layer is not None):
+            self.desktop_layer.setGeometry(watched.rect())
+            if self.grid_overlay is not None:
+                self.grid_overlay.setGeometry(self.desktop_layer.rect())
+            self._keep_desktop_behind_windows()
+        return super().eventFilter(watched, event)
+
+    def _keep_desktop_behind_windows(self, *_args):
+        """Desktop icons/grid < QMdiSubWindow < taskbar (z-order)."""
+        if self.desktop_layer is not None:
+            self.desktop_layer.lower()
+        if self.taskbar is not None:
+            self.taskbar.raise_()
+
+    def place_desktop_icon(self, icon, glyph_x: int, glyph_y: int):
+        """Snap a desktop icon to a free cell, never to an MDI application."""
+        if self.workspace is None or self.desktop_layer is None:
+            return
+        occupied = []
+        for other in (self.close_icon, self.documents_icon):
+            if other is not None and other is not icon and other.isVisible():
+                occupied.append((other.x(), other.y(), other.width(), other.height()))
+        occupied += [
+            (sub.x(), sub.y(), sub.width(), sub.height())
+            for sub in self.workspace.subWindowList()
+            if sub.isVisible() and not sub.isMinimized()
+        ]
+        x, y = desktop_drop_position(
+            glyph_x, glyph_y, self.desktop_layer.width(),
+            self.desktop_layer.height(), occupied,
+            icon_width=icon.width(), icon_height=icon.height(),
+        )
+        icon.move(x, y)
+        self._keep_desktop_behind_windows()
+
     def show_icon_grid(self, enabled: bool):
         if self.grid_overlay is None:
             return
         if enabled:
-            self.grid_overlay.setGeometry(self.workspace.viewport().rect())
+            self.grid_overlay.setGeometry(self.desktop_layer.rect())
             self.grid_overlay.show()
-            self.grid_overlay.raise_()
+            # Grid is above the background but below desktop icons; the
+            # whole desktop layer remains below every MDI application window.
+            self.grid_overlay.lower()
             self.close_icon.raise_()
+            if self.documents_icon is not None:
+                self.documents_icon.raise_()
+            self._keep_desktop_behind_windows()
         else:
             self.grid_overlay.hide()
 
@@ -575,15 +766,24 @@ class CreatedWindow(QWidget):
         sub.setAttribute(Qt.WA_DeleteOnClose, True)
         sub.setWindowTitle(title)
         sub.setWidget(widget)
-        sub.resize(min(450, max(220, self.workspace.width()-40)),
-                   min(320, max(150, self.workspace.height()-40)))
+        if module_id == 'calculator':
+            # Enough vertical room for scientific buttons, without obscuring the
+            # emulated taskbar on a 640x480 desktop.
+            sub.resize(min(475, max(340, self.workspace.width()-20)),
+                       min(465, max(405, self.workspace.height()-15)))
+        elif module_id in ('notepad', 'wordpad'):
+            sub.resize(min(700, max(300, self.workspace.width()-36)),
+                       min(530, max(240, self.workspace.height()-36)))
+        else:
+            sub.resize(min(450, max(220, self.workspace.width()-40)),
+                       min(320, max(150, self.workspace.height()-40)))
         self.workspace.addSubWindow(sub)
         self._mdi_windows[module_id] = sub
         self.taskbar.set_app(module_id, title, lambda key=module_id: self.toggle_module(key))
         sub.destroyed.connect(lambda _obj=None, key=module_id: self._forget_module(key))
         sub.show()
         self.workspace.setActiveSubWindow(sub)
-        self.taskbar.raise_()
+        self._keep_desktop_behind_windows()
         return sub
 
     def toggle_module(self, module_id: str):
@@ -617,7 +817,10 @@ class CreatedWindow(QWidget):
             bottom = self.taskbar.height() if self.taskbar is not None else 0
             self.workspace.setGeometry(0, 0, self.width(), max(1, self.height()-bottom))
             self._refresh_desktop_brush()
-            self.grid_overlay.setGeometry(self.workspace.viewport().rect())
+            if self.desktop_layer is not None:
+                self.desktop_layer.setGeometry(self.workspace.viewport().rect())
+                self.grid_overlay.setGeometry(self.desktop_layer.rect())
+                self._keep_desktop_behind_windows()
         if self.taskbar is not None:
             self.taskbar.setGeometry(0, self.height() - self.taskbar.height(),
                                     self.width(), self.taskbar.height())
@@ -626,10 +829,13 @@ class CreatedWindow(QWidget):
         if self.terminal_view is not None:
             self.terminal_view.setGeometry(0, 0, self.width(), self.height())
             self.terminal_view.lower()
-        icon = self.close_icon
-        parent = icon.parentWidget()
-        icon.move(max(0, min(icon.x(), parent.width()-icon.width())),
-                  max(0, min(icon.y(), parent.height()-icon.height())))
+        icons = [self.close_icon]
+        if self.documents_icon is not None:
+            icons.append(self.documents_icon)
+        for icon in icons:
+            parent = icon.parentWidget()
+            icon.move(max(0, min(icon.x(), parent.width()-icon.width())),
+                      max(0, min(icon.y(), parent.height()-icon.height())))
 
     def configure_start_menu(self, packet: dict, on_select=None):
         """Rebuild the Win95/XP Qt menu from a *validated* server JSON tree."""
@@ -736,7 +942,7 @@ class AboutDialog(QDialog):
         self.setModal(True)
         layout = QVBoxLayout(self)
         label = QLabel(
-            "RPC Client v.0.5.3\n"
+            "RPC Client v.0.5.9\n"
             "(c) 2026 by Jens Kallup - paule32\n"
             "all rights reserved.\n\n"
             "PythonBDE JSON RPC client for Windows and Linux."
@@ -752,12 +958,13 @@ class AboutDialog(QDialog):
 
 
 class RpcTestClient(QMainWindow):
-    def __init__(self, host: str, port: int):
+    def __init__(self, host: str, port: int, ca_cert=None):
         super().__init__()
         self.setWindowTitle("PythonBDE – JSON RPC Client (c) 2026 by Jens Kallup - paule32")
         self.resize(700, 590)
-        self.sock = QTcpSocket(self)
-        self.sock.connected.connect(self._connected)
+        self.sock = QSslSocket(self)
+        self.sock.encrypted.connect(self._connected)
+        self.sock.sslErrors.connect(self._ssl_errors)
         self.sock.readyRead.connect(self._read)
         self.sock.disconnected.connect(self._disconnected)
         self.sock.errorOccurred.connect(self._socket_error)
@@ -769,11 +976,17 @@ class RpcTestClient(QMainWindow):
         self._cached_menu_config = None
         self._handled_rpc_ids = set()
         self._module_requests = {}
+        self.remote_files = RemoteFiles(self)
         self._next_module_request = 0
         self._client_window = None
         self._closing_program = False
         self._window_teardown = False
         self._server_name = f"{host}:{port}"
+        self._ca_cert_default = ca_cert or os.environ.get(CERT_ENV) or str(
+            Path(__file__).resolve().parent / "certificates" / "ca.crt")
+        self._tls_ready = False
+        self._tls_handshake_nonce = 0
+        self._tls_timeout_ms = 10000
         self._requested_mode = "winXP"
         self._requested_display = {"unit": "pixels", "width": 640, "height": 480}
         self._last_gui_mode = "winXP"
@@ -816,6 +1029,17 @@ class RpcTestClient(QMainWindow):
         form.addRow("TCP Port", self.port)
         form.addRow("Username", self.username)
         form.addRow("Password", self.password)
+        self.ca_cert = QLineEdit(self._ca_cert_default)
+        self.ca_cert.setToolTip("Vertrauenswürdiges CA-/Serverzertifikat (.pem/.crt), vorab unabhängig verifizieren")
+        tls_cert_row = QWidget(self)
+        tls_cert_layout = QHBoxLayout(tls_cert_row)
+        tls_cert_layout.setContentsMargins(0, 0, 0, 0)
+        tls_cert_layout.addWidget(self.ca_cert)
+        choose_ca = QPushButton("...")
+        choose_ca.setToolTip("TLS-Zertifikat auswählen")
+        choose_ca.clicked.connect(self._browse_tls_certificate)
+        tls_cert_layout.addWidget(choose_ca)
+        form.addRow("TLS Certificate", tls_cert_row)
         common_panels.addWidget(connection_panel, 3)
 
         # Right panel: explicit UI/protocol mode, not actual OS emulation.
@@ -895,6 +1119,8 @@ class RpcTestClient(QMainWindow):
         self.status = QLabel("Disconnected")
         self.status.setObjectName("RPCConnectionStatus")
         self.statusBar().addPermanentWidget(self.status)
+        self.tls_status = QLabel("TLS: Disconnected")
+        self.statusBar().addPermanentWidget(self.tls_status)
         self.statusBar().showMessage("Ready")
 
         layout.addWidget(QLabel("Client Logging"))
@@ -971,6 +1197,47 @@ class RpcTestClient(QMainWindow):
             display = {"unit": "pixels", "width": width, "height": height}
         return validate_client_display(mode, display)
 
+    def _browse_tls_certificate(self):
+        filename, _ = QFileDialog.getOpenFileName(self, "Trust Server Certificate",
+                                                   self.ca_cert.text(),
+                                                   "Certificates (*.crt *.pem);;All files (*)")
+        if filename:
+            self.ca_cert.setText(filename)
+
+    def _configure_tls(self):
+        if not QSslSocket.supportsSsl():
+            raise RuntimeError("Qt5/OpenSSL TLS support unavailable")
+        path = Path(self.ca_cert.text().strip()).expanduser()
+        if not path.is_file():
+            raise ValueError(f"Trusted TLS certificate not found: {path}")
+        # CA != Leaf. Validation avoids Qt/OpenSSL issuer errors with legacy test leafs.
+        validate_ca_bundle(path)
+        # Exclusively load the explicitly selected PEM trust anchor.
+        certificates = QSslCertificate.fromData(path.read_bytes(), QSsl.Pem)
+        if not certificates or any(c.isNull() for c in certificates):
+            raise ValueError("TLS trust file contains no valid PEM certificates")
+        ssl_config = self.sock.sslConfiguration()
+        ssl_config.setCaCertificates(certificates)
+        ssl_config.setProtocol(QSsl.TlsV1_2OrLater)
+        self.sock.setSslConfiguration(ssl_config)
+        self.sock.setPeerVerifyMode(QSslSocket.VerifyPeer)
+        self.sock.setPeerVerifyName(self.host.text().strip())
+
+    def _ssl_errors(self, errors):
+        details = "; ".join(err.errorString() for err in errors)[:450]
+        self._log("TLS certificate verification failed: " + details + "; verify CA file (ca.crt), hostname and issuer", 400)
+        self.status.setText("TLS certificate rejected")
+        self.tls_status.setText("TLS: Certificate error")
+        self.sock.abort()  # never ignoreSslErrors / no downgrade
+
+    def _tls_timeout(self, attempt):
+        if attempt != self._tls_handshake_nonce or self._tls_ready:
+            return
+        if self.sock.state() != QAbstractSocket.UnconnectedState:
+            self._log("TLS handshake timeout", 400)
+            self.tls_status.setText("TLS: Timeout")
+            self.sock.abort()
+
     def connect_login(self):
         if self.sock.state() != QAbstractSocket.UnconnectedState:
             return
@@ -987,87 +1254,67 @@ class RpcTestClient(QMainWindow):
             QMessageBox.warning(self, "Display", str(exc))
             return
         self._server_name = f"{self.host.text().strip()}:{port}"
+        try:
+            self._configure_tls()
+        except (OSError, ValueError, RuntimeError) as exc:
+            self._log(f"TLS configuration failed: {exc}", 400)
+            QMessageBox.critical(self, "TLS Connection", str(exc))
+            return
         self._pending.clear()
         self._buffer.clear()
         self._handled_rpc_ids.clear()
         self._logged_in = False
+        self._tls_ready = False
         self.login_button.setEnabled(False)
-        self.status.setText("Connecting ...")
-        self._log(f"Connecting to {self._server_name}")
-        self.sock.connectToHost(self.host.text().strip(), port)
+        self.status.setText("TLS handshake ...")
+        self.tls_status.setText("TLS: Negotiating")
+        self._log(f"TLS connecting to {self._server_name}")
+        self._tls_handshake_nonce += 1
+        QTimer.singleShot(self._tls_timeout_ms, lambda n=self._tls_handshake_nonce: self._tls_timeout(n))
+        self.sock.connectToHostEncrypted(self.host.text().strip(), port)
 
     def _connected(self):
-        # NEVER send credentials until platform preflight is complete.
-        self._log("TCP connected; checking server capabilities")
+        # Qt encrypted is emitted ONLY after certificate and hostname validation.
+        if not self.sock.isEncrypted():
+            self._log("TLS encrypted signal without encryption", 400)
+            self.disconnect_client()
+            return
+        self._tls_ready = True
+        cipher = self.sock.sessionCipher().name()
+        proto = self.sock.sessionProtocol()
+        tls_version = "TLS 1.3" if proto == getattr(QSsl, "TlsV1_3", None) else "TLS 1.2+"
+        self.tls_status.setText(f"TLS: {tls_version} ({cipher})")
+        self._log(f"TLS established; cipher={cipher}; requesting server capabilities")
         self._send("hello", clientPlatform=platform.system())
         self.disconnect_button.setEnabled(True)
 
     def _handle_hello(self, packet):
+        # No unencrypted / unverified credentials. TLS already verified the
+        # server certificate chain AND hostname before this callback.
+        if not self._tls_ready or not self.sock.isEncrypted():
+            self._log("Login blocked: TLS not established", 400)
+            self.disconnect_client()
+            return
         if not packet.get("ok") or not isinstance(packet.get("data"), dict):
-            self._log("Server platform handshake failed", 400)
+            self._log("TLS server handshake failed", 400)
             self.disconnect_client()
             return
         info = packet["data"]
-        is_both_windows = platform.system() == "Windows" and info.get("platform") == "Windows"
-        fingerprint = str(info.get("serverFingerprint", ""))
-        try:
-            pinned = trusted_fingerprint(self._server_name) if platform.system() == "Windows" else None
-        except (OSError, ValueError) as exc:
-            self._log(f"Server trust store error: {exc}", 400)
+        if info.get("tls") is not True or info.get("passwordTransport") != "TLS":
+            self._log("TLS protocol downgrade or incompatible server refused", 400)
             self.disconnect_client()
             return
-        if pinned and (not is_both_windows or pinned != fingerprint):
-            self._log("Trusted server changed or encryption downgraded; connection refused", 400)
-            QMessageBox.critical(self, "Server Identity",
-                                 "Serverkennung geändert oder Verschlüsselung herabgestuft! Verbindung verweigert.")
-            self.disconnect_client()
-            return
-        if is_both_windows:
-            if (info.get("passwordTransport") != ENVELOPE_ALGORITHM
-                    or not info.get("serverPublicKey") or not fingerprint or not info.get("nonce")):
-                self._log("Windows server offers no valid Windows Secrets transport", 400)
-                self.disconnect_client()
-                return
-            if not pinned:
-                result = QMessageBox.question(
-                    self, "Trust Windows Server",
-                    "Erste Verbindung zum Windows-Server.\n"
-                    "Bitte diesen SHA-256 Fingerprint unabhängig prüfen:\n\n"
-                    + fingerprint + "\n\nServer dauerhaft vertrauen?",
-                    QMessageBox.Ok | QMessageBox.Cancel, QMessageBox.Cancel)
-                if result != QMessageBox.Ok:
-                    self.disconnect_client()
-                    return
-            try:
-                envelope = encrypt_password(info["serverPublicKey"], fingerprint,
-                                            info["nonce"], self.password.text())
-                if not pinned:
-                    save_trusted_fingerprint(self._server_name, fingerprint)
-            except (ValueError, OSError, RuntimeError) as exc:
-                self._log(f"Windows Secrets failed: {exc}", 400)
-                self.disconnect_client()
-                return
-            self._log("Windows Secrets credential envelope prepared")
-            self._send("login", clientPlatform="Windows", username=self.username.text(),
-                       passwordSecret=envelope, systemMode=self._requested_mode,
-                       display=self._requested_display)
-        else:
-            confirm = QMessageBox.question(
-                self, "Connection Security",
-                "Warning: Plain Password connection !\nWould you connect ?",
-                QMessageBox.Ok | QMessageBox.Cancel, QMessageBox.Cancel)
-            if confirm != QMessageBox.Ok:
-                self._log("Plaintext login cancelled by user")
-                self.disconnect_client()
-                return
-            self._log("WARNING: Using plaintext password (no TLS)", 400)
-            self._send("login", clientPlatform=platform.system(), allowPlaintext=True,
-                       username=self.username.text(), password=self.password.text(),
-                       systemMode=self._requested_mode, display=self._requested_display)
+        # Authentication payload is confidential inside verified TLS.
+        # Windows DPAPI/Windows Secrets remains server-side for old loopback
+        # clients; a second RSA envelope is unnecessary inside TLS.
+        self._send("login", clientPlatform=platform.system(), username=self.username.text(),
+                   password=self.password.text(), systemMode=self._requested_mode,
+                   display=self._requested_display)
         self.password.clear()
 
     def _send(self, action: str, **values):
-        if self.sock.state() != QAbstractSocket.ConnectedState:
+        if (self.sock.state() != QAbstractSocket.ConnectedState or
+                not self._tls_ready or not self.sock.isEncrypted()):
             return False
         payload = json.dumps({"action": action, **values}, ensure_ascii=False,
                              separators=(",", ":")).encode("utf-8") + b"\n"
@@ -1076,6 +1323,10 @@ class RpcTestClient(QMainWindow):
         return True
 
     def _read(self):
+        if not self._tls_ready or not self.sock.isEncrypted():
+            self._log("Rejected plaintext response", 400)
+            self.sock.abort()
+            return
         self._buffer.extend(bytes(self.sock.readAll()))
         if len(self._buffer) > MAX_BUFFER:
             self._log("Incoming data exceeded maximum; disconnecting", 400)
@@ -1121,6 +1372,7 @@ class RpcTestClient(QMainWindow):
                 window.configure_start_menu(self._cached_menu_config, self._on_start_menu_selected)
             except ValueError as exc:
                 self._log(f"Start menu configuration rejected: {exc}", 400)
+        window.open_documents_callback = self.remote_files.browse_documents
         window.set_theme(self._dark_theme)
         self.hide()
         window.log.setPlainText("\n".join(self._log_lines))
@@ -1132,6 +1384,9 @@ class RpcTestClient(QMainWindow):
 
     def _handle_reply(self, packet):
         action = self._pending.popleft() if self._pending else "unexpected"
+        if action.startswith('vfs_'):
+            self.remote_files.received(action, packet)
+            return
         if action == "hello":
             self._handle_hello(packet)
         elif action == "login":
@@ -1236,10 +1491,12 @@ class RpcTestClient(QMainWindow):
         from pathlib import Path
         import os
         trusted_path = Path(os.environ.get('PYTHONBDE_TRUSTED_MODULE_KEY') or
-                            Path(__file__).resolve().with_name('module_signing_public.pem'))
+                            Path(__file__).resolve().with_name('trusted_module_signing_public.pem'))
         try:
             manifest, module = verify_and_load(packet, trusted_path)
             widget = module.create_widget(self._client_window.workspace)
+            if isinstance(widget, QWidget):
+                widget.remote_files = self.remote_files
             if not isinstance(widget, QWidget):
                 raise ValueError('Signed module entrypoint must return a QWidget')
             self._client_window.launch_module_widget(expected, manifest['title'], widget)
@@ -1293,7 +1550,7 @@ class RpcTestClient(QMainWindow):
         self._send(result.pop("action"), **result)
 
     def _socket_error(self, error):
-        self._log("TCP error: " + self.sock.errorString(), 400)
+        self._log("TLS/TCP error: " + self.sock.errorString(), 400)
         self.status.setText("Connection error")
 
     def _close_client_window(self):
@@ -1322,6 +1579,9 @@ class RpcTestClient(QMainWindow):
         self.disconnect_client()
 
     def _disconnected(self):
+        self._tls_ready = False
+        self._tls_handshake_nonce += 1
+        self.tls_status.setText("TLS: Disconnected")
         self._logged_in = False
         self._pending.clear()
         self._buffer.clear()
@@ -1336,9 +1596,10 @@ class RpcTestClient(QMainWindow):
         self.login_button.setEnabled(True)
         self.disconnect_button.setEnabled(False)
         self.status.setText("Disconnected")
-        self._log("TCP disconnected")
+        self._log("TLS/TCP disconnected")
 
     def disconnect_client(self):
+        self._tls_handshake_nonce += 1
         self._close_client_window()
         if not self._closing_program:
             self.show()
@@ -1371,10 +1632,11 @@ def main():
     parser = argparse.ArgumentParser(description="PythonBDE JSON RPC Qt5 client")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=43650)
+    parser.add_argument("--ca-cert", default=None, help="Verifiziertes Server-/CA-Zertifikat in PEM-Form")
     options = parser.parse_args()
     app = QApplication(sys.argv[:1])
     app.setQuitOnLastWindowClosed(False)  # window switch must not kill Qt event loop
-    window = RpcTestClient(options.host, options.port)
+    window = RpcTestClient(options.host, options.port, ca_cert=options.ca_cert)
     window.show()
     code = app.exec_()
     return code

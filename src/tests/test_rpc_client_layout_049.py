@@ -69,7 +69,7 @@ class RpcClientLayout049Tests(unittest.TestCase):
     def test_status_bar_and_menu_without_settings(self):
         self.assertIn('self.status = QLabel("Disconnected")', SOURCE)
         self.assertIn('self.statusBar().addPermanentWidget(self.status)', SOURCE)
-        self.assertIn('self.status.setText("Connecting ...")', SOURCE)
+        self.assertIn('self.status.setText("TLS handshake ...")', SOURCE)
         self.assertIn('self.status.setText("Disconnected")', SOURCE)
         self.assertNotIn('layout.addWidget(self.status)', SOURCE)
         menus = ast.unparse(class_method('RpcTestClient', '_init_menu'))

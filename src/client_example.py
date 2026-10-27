@@ -7,6 +7,8 @@ import argparse
 import getpass
 import json
 import socket
+import ssl
+from pathlib import Path
 import sys
 
 
@@ -46,13 +48,24 @@ def main(argv=None):
     parser.add_argument("--select-alias", metavar="NAME", help="Alias für die Sitzung auswählen")
     parser.add_argument("--release-alias", metavar="NAME", help="Alias-Reservierung wieder freigeben")
     parser.add_argument("--listen", action="store_true", help="Verbunden bleiben und Server-Ereignisse empfangen")
+    parser.add_argument("--ca-cert", default=str(Path(__file__).resolve().parent / "certificates" / "ca.crt"),
+                        help="Verifiziertes CA-Zertifikat ca.crt (TLS ist Pflicht)")
     args = parser.parse_args(argv)
 
-    with socket.create_connection((args.host, args.port), timeout=5) as sock:
+    trust = Path(args.ca_cert).expanduser()
+    if not trust.is_file():
+        parser.error(f"TLS-Zertifikat fehlt: {trust} (vorab vom Server kopieren und prüfen)")
+    tls = ssl.create_default_context(cafile=str(trust))
+    tls.minimum_version = ssl.TLSVersion.TLSv1_2
+    with socket.create_connection((args.host, args.port), timeout=5) as raw:
+      with tls.wrap_socket(raw, server_hostname=args.host) as sock:
         with sock.makefile("rwb") as f:
             if args.ping:
                 show_response("ping", send(sock, f, "ping"))
 
+            hello = send(sock, f, "hello", clientPlatform="Python")
+            if not hello.get("ok") or hello.get("data", {}).get("tls") is not True:
+                raise ConnectionError("TLS-Protokoll nicht bestätigt")
             username = input("Benutzername: ")
             password = getpass.getpass("Passwort: ")
             result = send(sock, f, "login", username=username, password=password)

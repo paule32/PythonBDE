@@ -10,6 +10,8 @@ import sys
 import tempfile
 import uuid
 
+from .tls_security import DEFAULT_CERT, DEFAULT_KEY
+
 DEFAULT_PORT = 43650
 DISCOVERY_PORT = 43651
 
@@ -31,6 +33,9 @@ class Settings:
     ip: str = "127.0.0.1"
     port: int = DEFAULT_PORT
     nic: str = ""
+    tls_enabled: bool = True
+    tls_certificate: str = DEFAULT_CERT
+    tls_private_key: str = DEFAULT_KEY
 
     def validate(self):
         try:
@@ -47,6 +52,12 @@ class Settings:
             raise ValueError("Ungültige Server-ID in der INI-Datei") from exc
         if len(self.nic) > 200:
             raise ValueError("Ungültige Netzwerkadapterkennung")
+        if not isinstance(self.tls_enabled, bool):
+            raise ValueError("TLS enabled muss bool sein")
+        if self.tls_enabled and (not self.tls_certificate.strip() or not self.tls_private_key.strip()):
+            raise ValueError("TLS benötigt Zertifikat und privaten Schlüssel")
+        if not self.tls_enabled and self.ip != "127.0.0.1":
+            raise ValueError("Ohne TLS darf der Server nur 127.0.0.1 verwenden")
         return self
 
 
@@ -62,6 +73,9 @@ def load_settings(path: Path | None = None) -> Settings:
         ip=data.get("ip", "127.0.0.1"),
         port=int(data.get("port", DEFAULT_PORT)),
         nic=data.get("nic", ""),
+        tls_enabled=ini.getboolean("TLS", "enabled", fallback=True),
+        tls_certificate=ini.get("TLS", "certificate", fallback=DEFAULT_CERT),
+        tls_private_key=ini.get("TLS", "private_key", fallback=DEFAULT_KEY),
     ).validate()
     # Neue ID beim ersten Start dauerhaft sichern, nie bei normalem Neustart ändern.
     if not path.exists() or not data.get("id"):
@@ -76,6 +90,9 @@ def save_settings(settings: Settings, path: Path | None = None) -> None:
     ini = configparser.ConfigParser(interpolation=None)
     ini["Server"] = {"id": settings.server_id, "ip": settings.ip,
                      "port": str(settings.port), "nic": settings.nic}
+    ini["TLS"] = {"enabled": str(settings.tls_enabled).lower(),
+                  "certificate": settings.tls_certificate,
+                  "private_key": settings.tls_private_key}
     # Tempdatei in demselben Verzeichnis + atomare Ersetzung.
     fd, tmp = tempfile.mkstemp(prefix=".pythonbde-", suffix=".tmp", dir=str(path.parent))
     try:

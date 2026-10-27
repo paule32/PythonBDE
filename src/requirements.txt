@@ -1,2 +1,2 @@
 PyQt5>=5.15,<6
-cryptography>=42,<49
+cryptography>=42,<51

@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import re
 import secrets
+import uuid
 
 from .crypto import hash_password, verify_password
 from .dbf import DBFStore
@@ -31,7 +32,7 @@ def parse_time(value: str):
 
 def public_user(user: dict) -> dict:
     """Nie PWHASH/PWSALT und keine PBKDF-Konfiguration an UI/API ausgeben."""
-    fields = ("USERNAME", *RIGHTS, "LOCKUSER", "COUNTPASS", "COUNTLIM", "FAILS", "LOCKUNTIL", "EXPIRE", "CREATED", "UPDATED")
+    fields = ("USERNAME", *RIGHTS, "LOCKUSER", "COUNTPASS", "COUNTLIM", "FAILS", "LOCKUNTIL", "EXPIRE", "CREATED", "UPDATED", "ACCTYPE")
     return {k: user[k] for k in fields}
 
 
@@ -71,15 +72,18 @@ class UserManager:
                 raise AuthError("Expire muss ein ISO-8601-UTC-Zeitpunkt sein")
 
     def create(self, name: str, password: str, rights: dict | None = None,
-               *, lock_user=False, count_pass=5, count_limit=15, expire=""):
+               *, lock_user=False, count_pass=5, count_limit=15, expire="", account_type="RDP"):
         self._validate(name, count_pass, count_limit, expire)
+        if account_type not in ("RDP", "DB"):
+            raise AuthError("Use as RDP oder Use as DB auswählen")
         pw = hash_password(password)
         def write(users):
             if name.casefold() in users:
                 raise AuthError("Benutzer existiert bereits")
             now = timestamp(utcnow())
             row = dict(USERNAME=name, **pw, **{k: bool((rights or {}).get(k, False)) for k in RIGHTS},
-                       LOCKUSER=bool(lock_user), COUNTPASS=count_pass, COUNTLIM=count_limit,
+                       LOCKUSER=bool(lock_user), ACCTYPE=account_type, FSROOT=uuid.uuid4().hex,
+                       COUNTPASS=count_pass, COUNTLIM=count_limit,
                        FAILS=0, LOCKUNTIL="", EXPIRE=expire or "", CREATED=now, UPDATED=now)
             users[name.casefold()] = row
             self._ensure_admin_remains(users)
@@ -87,12 +91,16 @@ class UserManager:
         return public_user(self.get(name))
 
     def edit(self, name: str, *, password=None, rights=None, lock_user=None,
-             count_pass=None, count_limit=None, expire=None):
+             count_pass=None, count_limit=None, expire=None, account_type=None):
         pw = hash_password(password) if password else None
         def write(users):
             if name.casefold() not in users:
                 raise AuthError("Benutzer unbekannt")
             row = users[name.casefold()]
+            if account_type is not None:
+                if account_type not in ("RDP", "DB"):
+                    raise AuthError("Ungültiger Account-Typ")
+                row["ACCTYPE"] = account_type
             if rights is not None:
                 if not isinstance(rights, dict):
                     raise AuthError("Rechte müssen ein Objekt sein")

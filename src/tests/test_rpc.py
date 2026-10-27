@@ -283,7 +283,7 @@ class TestQtClientSource(unittest.TestCase):
     def test_qt_client_is_event_driven_and_creates_window(self):
         text = (ROOT / 'rpc_client.py').read_text(encoding='utf-8')
         ast.parse(text)
-        for required in ('QTcpSocket', 'readyRead.connect', 'CreatedWindow(', 'window.show()',
+        for required in ('QSslSocket', 'readyRead.connect', 'CreatedWindow(', 'window.show()',
                          'result_message(', 'isVisible()', 'lastErrorCode', 'rpc_request'):
             self.assertIn(required, text)
         self.assertNotIn('subprocess.', text)

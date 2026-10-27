@@ -150,10 +150,10 @@ class EmulationLayout(unittest.TestCase):
         self.assertIn('self.system_mode_group = QButtonGroup(self)',source)
         self.assertIn('self.fullscreen_radio.setEnabled(False)',source)
 
-    def test_payload_in_encrypted_and_plaintext_login(self):
+    def test_payload_in_tls_login(self):
         source=ast.unparse(method('_handle_hello'))
-        self.assertGreaterEqual(source.count('systemMode=self._requested_mode'),2)
-        self.assertGreaterEqual(source.count('display=self._requested_display'),2)
+        self.assertGreaterEqual(source.count('systemMode=self._requested_mode'),1)
+        self.assertGreaterEqual(source.count('display=self._requested_display'),1)
         selected=ast.unparse(method('_display_selection'))
         self.assertIn("'cells'",selected)
         self.assertIn("'pixels'",selected)

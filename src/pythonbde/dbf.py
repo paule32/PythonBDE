@@ -21,6 +21,11 @@ FIELDS = [
     ("FAILS", "N", 5), ("LOCKUNTIL", "C", 20), ("EXPIRE", "C", 20),
     ("CREATED", "C", 20), ("UPDATED", "C", 20),
 ]
+LEGACY_FIELDS = tuple(FIELDS)
+# v0.5.7 adds a persistent, mutually exclusive RDP/DB marker, and an opaque
+# workspace identifier. Old dBASE III files remain readable and are upgraded
+# on the next normal write (no existing account password is changed).
+FIELDS += [("ACCTYPE", "C", 3), ("FSROOT", "C", 32)]
 HEADER_LEN = 32 + 32 * len(FIELDS) + 1
 RECORD_LEN = 1 + sum(width for _, _, width in FIELDS)
 MAX_USERS = 10_000
@@ -120,11 +125,19 @@ def parse_dbf(blob: bytes) -> dict[str, dict]:
     if len(blob) < HEADER_LEN or blob[0] != 0x03:
         raise ValueError("Unbekanntes oder beschädigtes DBF-Format")
     count, head_len, record_len = struct.unpack_from("<IHH", blob, 4)
-    if head_len != HEADER_LEN or record_len != RECORD_LEN or count > MAX_USERS:
+    legacy_header = 32 + 32*len(LEGACY_FIELDS) + 1
+    legacy_record = 1 + sum(width for _,_,width in LEGACY_FIELDS)
+    if count > MAX_USERS:
+        raise ValueError("Ungültige Anzahl DBF-Datensätze")
+    if (head_len, record_len) == (HEADER_LEN, RECORD_LEN):
+        fields = FIELDS
+    elif (head_len, record_len) == (legacy_header, legacy_record):
+        fields = LEGACY_FIELDS
+    else:
         raise ValueError("Abweichendes DBF-Schema/Anzahl Datensätze")
     if blob[head_len-1] != 0x0d or len(blob) < head_len + count*record_len:
         raise ValueError("Beschädigter DBF-Header/abgeschnittene Datensätze")
-    for i, (name, kind, width) in enumerate(FIELDS):
+    for i, (name, kind, width) in enumerate(fields):
         field = blob[32+i*32:64+i*32]
         if field[:11].split(b"\0", 1)[0] != name.encode() or field[11] != ord(kind) or field[16] != width:
             raise ValueError(f"DBF-Schema stimmt bei {name} nicht überein")
@@ -136,9 +149,15 @@ def parse_dbf(blob: bytes) -> dict[str, dict]:
             raise ValueError("Unerwarteter gelöschter/ungültiger DBF-Datensatz")
         pos = 1
         row = {}
-        for name, kind, width in FIELDS:
+        for name, kind, width in fields:
             row[name] = _decode_field(record[pos:pos+width], kind)
             pos += width
+        # Historical accounts default to RDP. The derived FSROOT for an old
+        # account is stable until the first migration write persists it.
+        if "ACCTYPE" not in row:
+            row["ACCTYPE"] = "RDP"
+            import uuid
+            row["FSROOT"] = uuid.uuid5(uuid.NAMESPACE_OID, "pythonbde-v057:" + row["USERNAME"].casefold()).hex
         key = row["USERNAME"].casefold()
         if not key or key in users:
             raise ValueError("Ungültige oder doppelte Benutzernamen")

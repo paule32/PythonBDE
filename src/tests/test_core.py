@@ -31,7 +31,11 @@ class TestCore(unittest.TestCase):
         self.assertEqual(HEADER_LEN, struct.unpack_from("<H", data, 8)[0])
         self.assertEqual(RECORD_LEN, struct.unpack_from("<H", data, 10)[0])
         self.assertEqual(32+32*len(FIELDS)+1+RECORD_LEN+1, len(data))
-        self.assertEqual(row, parse_dbf(data)["admin"])
+        result = parse_dbf(data)["admin"]
+        for key, value in row.items():
+            self.assertEqual(value, result[key])
+        self.assertIn("ACCTYPE", result)
+        self.assertIn("FSROOT", result)
         with self.assertRaises(ValueError):
             parse_dbf(data[:-10])
 

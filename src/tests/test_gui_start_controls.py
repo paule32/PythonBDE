@@ -87,7 +87,7 @@ class FakeServer:
         self.fail = False
         self.bind_ip = "127.0.0.1"
 
-    def start(self, port, ip, server_id):
+    def start(self, port, ip, server_id, **tls_settings):
         self.starts += 1
         if self.fail:
             raise OSError("Port bereits in Benutzung")
@@ -135,24 +135,36 @@ class TestGuiStartControls(unittest.TestCase):
         wnd = FakeWindow()
         self.assertTrue(wnd.manager_dock.log_status.start_button.enabled)
         self.assertFalse(wnd.manager_dock.log_status.stop_button.enabled)
+        wnd.settings.tls_enabled = True
+        wnd.settings.tls_certificate = "certificates/server.crt"
+        wnd.settings.tls_private_key = "certificates/server.key"
         wnd.start_server()
         self.assertEqual(1, wnd.server.starts)
         self.assertFalse(wnd.manager_dock.log_status.start_button.enabled)
         self.assertFalse(wnd.action_start.enabled)
         self.assertTrue(wnd.manager_dock.log_status.stop_button.enabled)
         self.assertTrue(wnd.action_stop.enabled)
+        wnd.settings.tls_enabled = True
+        wnd.settings.tls_certificate = "certificates/server.crt"
+        wnd.settings.tls_private_key = "certificates/server.key"
         wnd.start_server()  # bewusster Doppelaufruf, auch ohne disabled Qt-Button
         self.assertEqual(1, wnd.server.starts)
         wnd.stop_server()
         self.assertFalse(wnd.server.listener.isListening())
         self.assertTrue(wnd.manager_dock.log_status.start_button.enabled)
         self.assertFalse(wnd.manager_dock.log_status.stop_button.enabled)
+        wnd.settings.tls_enabled = True
+        wnd.settings.tls_certificate = "certificates/server.crt"
+        wnd.settings.tls_private_key = "certificates/server.key"
         wnd.start_server()
         self.assertEqual(2, wnd.server.starts)
 
     def test_failed_start_keeps_start_button_enabled(self):
         wnd = FakeWindow()
         wnd.server.fail = True
+        wnd.settings.tls_enabled = True
+        wnd.settings.tls_certificate = "certificates/server.crt"
+        wnd.settings.tls_private_key = "certificates/server.key"
         wnd.start_server()
         self.assertFalse(wnd.server.listener.isListening())
         self.assertTrue(wnd.manager_dock.log_status.start_button.enabled)
@@ -162,6 +174,9 @@ class TestGuiStartControls(unittest.TestCase):
     def test_attempt_in_progress_is_guarded(self):
         wnd = FakeWindow()
         wnd._starting_server = True
+        wnd.settings.tls_enabled = True
+        wnd.settings.tls_certificate = "certificates/server.crt"
+        wnd.settings.tls_private_key = "certificates/server.key"
         wnd.start_server()
         self.assertEqual(0, wnd.server.starts)
         self.assertFalse(wnd.manager_dock.log_status.start_button.enabled)

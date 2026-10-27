@@ -11,14 +11,14 @@ from PyQt5.QtWidgets import (
     QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
     QLineEdit, QMainWindow, QMessageBox, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget, QDockWidget, QTreeWidget, QTreeWidgetItem, QSplitter,
-    QScrollArea, QComboBox, QDialogButtonBox, QTextEdit, QAction, QFrame,
+    QScrollArea, QComboBox, QDialogButtonBox, QTextEdit, QAction, QFrame, QRadioButton, QButtonGroup,
     QPlainTextEdit, QFileDialog, QMenu, QStyle, QSizePolicy, QToolBar
 )
 from .auth import AuthError, RIGHTS, UserManager, parse_time, timestamp
 from .protocol import BDEServer
-from .settings import Settings, load_settings, save_settings, DISCOVERY_PORT
+from .settings import Settings, load_settings, save_settings, DISCOVERY_PORT, application_dir
 from .discovery import discover_existing, network_interfaces, broadcast_targets
-from PyQt5.QtNetwork import QHostAddress, QTcpServer, QUdpSocket
+from PyQt5.QtNetwork import QHostAddress, QTcpServer, QUdpSocket, QSslSocket
 from .platform_support import operating_system, password_backend
 from .user_visuals import account_border
 from .eventlog import EventLog
@@ -26,6 +26,7 @@ from .aliases import AliasError, AliasInUse
 from .theme import apply_application_theme, theme_icon
 from .blocking_dock import BlockingDock
 from .blocking import TYPES
+from .tls_security import resolve_certificate_file, validate_server_certificate
 
 
 class CredentialDialog(QDialog):
@@ -87,8 +88,21 @@ class SettingsDialog(QDialog):
                 break
         layout.addLayout(form)
         layout.addWidget(QLabel(f"Server-ID (dauerhaft): {settings.server_id}"))
-        notice = QLabel("Hinweis: Externe TCP-Verbindungen übertragen Passwörter derzeit im Klartext. "
-                        "Für Netzzugriffe TLS-Proxy/VPN verwenden.")
+        tls_box = QGroupBox("TLS / SSL Security")
+        tls_form = QFormLayout(tls_box)
+        self.tls_toggle = QCheckBox("Enable TLS (empfohlen, für LAN erforderlich)")
+        self.tls_toggle.setChecked(settings.tls_enabled)
+        self.tls_cert = QLineEdit(settings.tls_certificate)
+        self.tls_key = QLineEdit(settings.tls_private_key)
+        tls_form.addRow(self.tls_toggle)
+        tls_form.addRow("Certificate (.crt)", self.tls_cert)
+        tls_form.addRow("Private Key (.key)", self.tls_key)
+        self.test_certificate_btn = QPushButton("Test Certificate")
+        tls_form.addRow(self.test_certificate_btn)
+        self.test_certificate_btn.clicked.connect(self._test_certificate)
+        layout.addWidget(tls_box)
+        notice = QLabel("TLS schützt Login, JSON-RPC, virtuelle Dateien und .cpy-Module. "
+                        "Ohne TLS ist nur 127.0.0.1 zulässig. TLS-Zertifikat ist Pflicht.")
         notice.setWordWrap(True)
         layout.addWidget(notice)
         buttons = QHBoxLayout()
@@ -110,11 +124,33 @@ class SettingsDialog(QDialog):
     def values(self):
         selected = self.nic.currentData()
         return replace(self.settings, ip=self.ip.text().strip(), port=self.port.value(),
-                       nic=selected[0] if selected and selected[1] == self.ip.text().strip() else "").validate()
+                       nic=selected[0] if selected and selected[1] == self.ip.text().strip() else "",
+                       tls_enabled=self.tls_toggle.isChecked(),
+                       tls_certificate=self.tls_cert.text().strip(),
+                       tls_private_key=self.tls_key.text().strip()).validate()
+
+    def _validate_tls(self, settings):
+        if not settings.tls_enabled:
+            return "TLS disabled (local loopback only)"
+        if not QSslSocket.supportsSsl():
+            raise RuntimeError("TLS: Qt5/OpenSSL-Unterstützung fehlt")
+        cert = resolve_certificate_file(settings.tls_certificate, application_dir())
+        key = resolve_certificate_file(settings.tls_private_key, application_dir())
+        alg = validate_server_certificate(cert, key)
+        return f"OK: {alg} certificate and private key verified"
+
+    def _test_certificate(self):
+        try:
+            msg = self._validate_tls(self.values())
+        except (ValueError, OSError, RuntimeError, PermissionError) as exc:
+            QMessageBox.warning(self, "TLS Certificate", str(exc))
+            return
+        QMessageBox.information(self, "TLS Certificate", msg)
 
     def _save(self):
         try:
             settings = self.values()
+            self._validate_tls(settings)
             save_settings(settings)
         except (OSError, ValueError) as err:
             QMessageBox.warning(self, "Save Config", str(err))
@@ -125,10 +161,12 @@ class SettingsDialog(QDialog):
     def _test(self):
         try:
             cfg = self.values()
+            self._validate_tls(cfg)
             if self.server.listener.isListening() and (
                 self.server.bind_ip == cfg.ip and self.server.listener.serverPort() == cfg.port
             ):
-                QMessageBox.information(self, "Test-Config", "OK: Server lauscht bereits an dieser IP und diesem Port.")
+                QMessageBox.information(self, "Test-Config", "OK: Server lauscht bereits an dieser IP und diesem Port. "
+                                        + ("TLS aktiv." if self.server.tls_enabled else "Nur Loopback ohne TLS."))
                 return
             addresses = {"127.0.0.1", "0.0.0.0"} | {a["ip"] for a in self.adapters}
             if cfg.ip not in addresses:
@@ -152,7 +190,7 @@ class SettingsDialog(QDialog):
                 finally:
                     udp.close()
             QMessageBox.information(self, "Test-Config", "OK: Bind-Test erfolgreich. Server kann lokal starten. "
-                                    "Netzwerk-Discovery ist best-effort.")
+                                    "TLS-Konfiguration geprüft; Netzwerk-Discovery ist best-effort.")
         except (OSError, ValueError) as err:
             QMessageBox.warning(self, "Test-Config fehlgeschlagen", str(err))
 
@@ -185,6 +223,14 @@ class UserEditor(QWidget):
             cb = QCheckBox(right.title() if right != "ANSICHT" else "Ansicht")
             self.rights[right] = cb
             grid.addWidget(cb, i // 3, i % 3)
+        self.rdp_radio = QRadioButton("Use as RDP")
+        self.db_radio = QRadioButton("Use as DB")
+        self.account_modes = QButtonGroup(self)
+        self.account_modes.addButton(self.rdp_radio)
+        self.account_modes.addButton(self.db_radio)
+        grid.addWidget(self.rdp_radio, 2, 0, 1, 2)
+        grid.addWidget(self.db_radio, 2, 2)
+        self.rdp_radio.setChecked(True)
         outer.addWidget(rights_group)
         options = QGroupBox("Password Options")
         form = QFormLayout(options)
@@ -237,6 +283,8 @@ class UserEditor(QWidget):
         self.password.setPlaceholderText("Mindestens 8 Zeichen" if is_new else "Leer lassen = unverändert")
         for right, cb in self.rights.items():
             cb.setChecked(bool(user and user.get(right)))
+        self.db_radio.setChecked(bool(user and user.get("ACCTYPE") == "DB"))
+        self.rdp_radio.setChecked(not self.db_radio.isChecked())
         self.lock_user.setChecked(bool(user and user.get("LOCKUSER")))
         self.count_pass.setValue(user["COUNTPASS"] if user else 5)
         self.count_limit.setValue(user["COUNTLIM"] if user else 15)
@@ -266,7 +314,8 @@ class UserEditor(QWidget):
         payload = {"username": self.username.text().strip(), "password": self.password.text() or None,
                    "rights": {key: box.isChecked() for key, box in self.rights.items()},
                    "lock_user": self.lock_user.isChecked(), "count_pass": self.count_pass.value(),
-                   "count_limit": self.count_limit.value(), "expire": expires}
+                   "count_limit": self.count_limit.value(), "expire": expires,
+                   "account_type": "DB" if self.db_radio.isChecked() else "RDP"}
         self.on_save(payload, self.is_new)
 
 
@@ -647,6 +696,8 @@ class UserManagerDock(QDockWidget):
         try:
             if is_new:
                 self.window.users.create(name, data.pop("password"), data.pop("rights"), **data)
+                if getattr(self.window.server, 'virtual_fs', None) is not None:
+                    self.window.server.virtual_fs.workspace(self.window.users.get(name))
                 operation = "Insert Record"
                 description = "User successfully created"
             else:
@@ -1060,7 +1111,10 @@ class MainWindow(QMainWindow):
         self.update_status()
         try:
             self.server.start(self.settings.port, self.settings.ip,
-                              server_id=self.settings.server_id)
+                              server_id=self.settings.server_id,
+                              tls_enabled=self.settings.tls_enabled,
+                              tls_certificate=self.settings.tls_certificate,
+                              tls_private_key=self.settings.tls_private_key)
         except (OSError, ValueError) as err:
             self.record(400, f"Server can not be started: {err}")
             QMessageBox.warning(self, "Server Start failed", str(err))
@@ -1092,7 +1146,9 @@ class MainWindow(QMainWindow):
         if dlg.exec_() == QDialog.Accepted:
             before = self.settings
             self.settings = dlg.settings
-            if self.server.listener.isListening() and (before.ip, before.port) != (self.settings.ip, self.settings.port):
+            if self.server.listener.isListening() and (before.ip, before.port, before.tls_enabled,
+                    before.tls_certificate, before.tls_private_key) != (self.settings.ip, self.settings.port,
+                    self.settings.tls_enabled, self.settings.tls_certificate, self.settings.tls_private_key):
                 QMessageBox.information(self, "Settings", "Konfiguration gespeichert. Stop/Start des Servers "
                                         "erforderlich, um IP und Port zu übernehmen.")
             self.statusBar().showMessage("Serverkonfiguration in pythonbde.ini gespeichert")

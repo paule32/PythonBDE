@@ -103,6 +103,8 @@ class ClientUiTests(unittest.TestCase):
     def test_server_disconnect_closes_rpc_window_and_shows_login(self):
         fake = StubClient()
         fake._logged_in = True
+        fake._tls_handshake_nonce = 0
+        fake.tls_status = type("TlsLabel", (), {"setText": lambda *args: None})()
         fake._disconnected()
         self.assertFalse(fake._logged_in)
         self.assertEqual(fake.calls[:2], ['close-client-window', 'show-login-screen'])
