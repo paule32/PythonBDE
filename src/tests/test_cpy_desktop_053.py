@@ -85,10 +85,10 @@ class SignedCpyRoundtrip(unittest.TestCase):
                     # Full GUI modules require a real Qt5 runtime. A separate
                     # test verifies their pure engines, and this test verifies
                     # signature/bytecode loading without constructing a window.
-                    widget = mod.create_widget(None) if mid not in ('calculator', 'notepad', 'wordpad') else None
+                    widget = mod.create_widget(None) if mid not in ('calculator', 'notepad', 'wordpad', 'spreadsheet') else None
                 self.assertEqual(mid, manifest['id'])
                 self.assertTrue(callable(mod.create_widget))
-                if mid not in ('calculator', 'notepad', 'wordpad'):
+                if mid not in ('calculator', 'notepad', 'wordpad', 'spreadsheet'):
                     self.assertIsNotNone(widget)
                 self.assertLess(len(json.dumps(packet).encode()), MAX_CPY_EVENT_BYTES)
 

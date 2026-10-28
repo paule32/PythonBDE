@@ -1,3 +1,69 @@
+## v0.6.6 (2026-10-28) – Qt5-Dock-Korrektur und konsolenloser Start
+
+- `UserManagerDock`: nicht vorhandenes `QStyle.SP_DockWidgetFloatButton` durch unterstützte Qt5-Titelleistensymbole ersetzt, mit Aktualisierung beim Andocken/Abkoppeln.
+- Watchdog-MinGW-Compilerprüfung/Autobuild (`g++`) laufen unter Windows mit `CREATE_NO_WINDOW` und `STARTF_USESHOWWINDOW/SW_HIDE`, damit kein Konsolenfenster aufblinkt.
+- Watchdog-GUI-EXE wird ohne neues Konsolenfenster gestartet, ihre Crash-Dialoge bleiben sichtbar.
+- Windows-`icacls`-Aufrufe in TLS- und VFS-Komponenten ebenfalls konsolenlos.
+- `.pyw`-Startpunkte können eigene, privat zugewiesene Konsolen ganz früh verstecken; fremde Kommandozeilen-Fenster bleiben unangetastet.
+- Tests für Qt5-Konstanten und Prozessstartoptionen erweitert. Nativer Win32-/PyQt5-Laufzeittest weiterhin erforderlich.
+
+## v0.6.5 (2026-10-28) – MinGW32-/MinGW64-Compilerkorrektur
+
+- `layout()` im C++-Watchdog: Win32-`LONG`-Werte der `RECT`-Breiten- und Höhendifferenz werden vor `std::max()` explizit in `int` umgewandelt. Korrigiert den gemeldeten GCC-16-Fehler `no matching function for call to max(int, LONG)`.
+- Regressionstest stellt sicher, dass der Typkonflikt nicht erneut eingeführt wird.
+- Alle Funktionen und Dateien aus v0.6.4 bleiben erhalten. Native MinGW-Builds müssen auf Windows verifiziert werden.
+
+## v0.6.4 (2026-10-28) – Externer MinGW32/MinGW64 Crash Watchdog
+
+- Eigenständiger Windows-C++-Watchdog (`watchdog/pythonbde_watchdog.cpp`): eigener Prozess, Win32-EDIT-Dialog mit Copy/Close, keine Python-/Qt-Abhängigkeit.
+- Automatischer Start pro Server-/RPC-Client-PID **vor** PyQt5, Win32-Mutex gegen Duplikate, Ready-Event gegen frühen Prozessabbruch; normaler Exit erzeugt keinen Dialog.
+- Python-`faulthandler` mit separatem PID-Log, Auswertung der letzten Fehlerlogeinträge durch den Watchdog nach unerwarteter Beendigung.
+- Separate MinGW32-/MinGW64-Buildskripte und automatischer Best-Effort-Build mit richtigem MinGW-Compiler, wenn die EXE fehlt; der Anwendungsstart bleibt bei fehlendem Compiler möglich.
+- Optionales WER-Minidump-Konfigurationsskript. Es erstellt keine Dumps nach dem Prozessende.
+- README um bereits gezeigte Architektur-Grafik (PNG und SVG), Fehlerfalltabelle, Einschränkungen und Einrichtung ergänzt; bestehende Dokumentation vollständig erhalten.
+- Statische Tests und Python-Regressionen, aber ohne native Win32-/MinGW-Kompilierung in dieser Linux-Testumgebung.
+
+## v0.6.3 (2026-10-28) – GUI-Traceback und nativer Windows-EDIT-Fallback
+
+- Frühe Installation zentraler Exception-Hooks **vor dem PyQt5-Import** in `server.py` und `rpc_client.py`.
+- Bei laufendem QApplication: Qt5-Fehlerdialog mit vollständig lesbarem, kopierbarem Traceback.
+- Ohne QApplication oder bei kaputtem Qt: natives, mehrzeiliges Win32-EDIT-Fenster samt Scrollbars, Copy Traceback und Close; wenn die Win32-Fenstererzeugung scheitert, `MessageBoxW`.
+- Auch Hintergrundthread-Ausnahmen und unraisable exceptions protokolliert; `SystemExit`/`KeyboardInterrupt` erzeugen keinen Fehlerdialog.
+- `sys.stderr` wird parallel in eine Datei gespiegelt, selbst wenn `pythonw.exe` keine Konsole bereitstellt.
+- Fehlerdatei im benutzerspezifischen Anwendungsdatenordner (`pythonbde_errors.log`), auf 5 MiB mit `.old`-Rotation begrenzt.
+- Konsolenlose Einstiegsdateien: `server_gui.pyw` und `rpc_client_gui.pyw`.
+- 297 Python-Tests erfolgreich, nativer Win32-UI-Laufzeittest ausstehend.
+
+## v0.6.2 (2026-10-28) – Benutzeraktionen in Dock-Titelleiste
+
+- Users-/Admins-Dock: `New User`, `Delete Account`, `Unlock`, `Refresh` befinden sich nun
+  rechts neben dem Titel auf einer eigenen kompakten `QDockWidget`-Titelleiste.
+- Separate Button-Zeile aus dem Hauptinhalt des Docks entfernt; zusätzlicher Platz
+  steht für Benutzerbaum, Eigenschaften und Logging zur Verfügung.
+- Float-/Dock- und Close-Schaltflächen explizit erhalten, da Qt bei einer benutzerdefinierten
+  Titelleiste die bisherigen Standard-Dockbuttons nicht mehr selbst zeichnet.
+- Vorhandene Kontooperationen, Sperrstatus-Rahmen, Kontextmenüs und Live-Status unverändert.
+- Native visuelle Qt5-Validierung auf Windows/Linux noch ausstehend.
+
+## v0.6.1 (2026-10-28) – Dock Settings & Time Windows
+
+- Server Settings als QDockWidget mit horizontal teilbarem Netzwerk/TLS- und CA-Zertifikatspanel.
+- Vier CA/Server-Zertifikatpfade in INI, Chain-Prüfung, Zertifikatsgenerierung nur bei Serverstopp,
+  automatische Rotation der Server-UUID nach ausdrücklich bestätigter Neuerstellung.
+- Neues Manager → Time Window: 7 Tage, 96 Slots pro Tag, 3 feste Kategorien und unzugewiesene Zeitbereiche,
+  Maus-Ziehmarkierung und atomare JSON-Persistenz neben der Benutzer-DBF.
+- Keine automatische Zeitfenster-Enforcement-Regel am Login; visuelle Windows/Qt5-Tests stehen aus.
+
+## v0.6.0 (2026-10-28) – PythonBDE Sheets
+
+- Neue Excel-ähnliche remote Qt5-Tabellenkalkulation als signiertes `.cpy`-Modul.
+- Mehrere Arbeitsblätter, Formelleiste, Tabellenraster, Grundformeln und begrenzte Excel-Funktionsmenge, Dezimal-Rechenengine ohne eval.
+- Zellstile, Zwischenablage, Formel-Fill, Undo/Redo, Sortieren, Suchen, AutoSumme, einfache Diagrammansicht.
+- Remote-Open/Save/Save As über vorhandene VFS/TLS-Sitzung: `.pysheet`, CSV, TSV, begrenzte XLSX-Unterstützung.
+- Neues Startmenü-Element unter Programs/Accessories, MDI-Startgröße angepasst.
+- .cpy-Grenze 64 KiB komprimiert, JSONL-Nachrichtenlimit 128 KiB, max. entpackter Modulinhalt nun 256 KiB (mit ZIP-Bomb-Schutz).
+- 279 automatische Tests bestanden (15 neue); nativer PyQt5-Sichttest noch offen.
+
 ## v0.5.9 TLS CA-Chain Fix
 - Generierung einer privaten CA (`ca.crt`, `ca.key`) plus Serverzertifikat (`server.crt`, `server.key`).
 - Client vertraut der CA, nicht dem Server-Leaf; prueft CA-Eignung und Hostname.

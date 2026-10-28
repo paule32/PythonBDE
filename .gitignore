@@ -14,3 +14,4 @@ venv/
 build/
 dist/
 /tmp
+src/watchdog/bin/pythonbde_watchdog_x86.exe

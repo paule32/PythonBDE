@@ -4,6 +4,11 @@ from __future__ import annotations
 import argparse
 import sys
 
+from pythonbde.gui_errors import install_exception_handler
+
+# Must be active before QApplication / PyQt5 is imported.
+install_exception_handler(app_name="PythonBDE Server")
+
 
 def main():
     from pythonbde.platform_support import default_dbf_path, file_lock_backend, operating_system, password_backend
@@ -19,6 +24,10 @@ def main():
         print(f"Dateisperre: {file_lock_backend()}")
         print(f"Benutzerdatei: {args.dbf}")
         return 0
+
+    # Separate native Win32 watchdog must start *before* Qt is imported.
+    from pythonbde.native_watchdog import start_watchdog
+    start_watchdog(app_name="PythonBDE Server")
 
     from PyQt5.QtWidgets import QApplication, QDialog, QMessageBox
     from pythonbde.single_instance import WindowsMutex, ActivationServer, signal_existing

@@ -12,7 +12,7 @@ from PyQt5.QtWidgets import (
     QLineEdit, QMainWindow, QMessageBox, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget, QDockWidget, QTreeWidget, QTreeWidgetItem, QSplitter,
     QScrollArea, QComboBox, QDialogButtonBox, QTextEdit, QAction, QFrame, QRadioButton, QButtonGroup,
-    QPlainTextEdit, QFileDialog, QMenu, QStyle, QSizePolicy, QToolBar
+    QPlainTextEdit, QFileDialog, QMenu, QStyle, QSizePolicy, QToolBar, QToolButton
 )
 from .auth import AuthError, RIGHTS, UserManager, parse_time, timestamp
 from .protocol import BDEServer
@@ -27,6 +27,8 @@ from .theme import apply_application_theme, theme_icon
 from .blocking_dock import BlockingDock
 from .blocking import TYPES
 from .tls_security import resolve_certificate_file, validate_server_certificate
+from .server_settings_dock import ServerSettingsDock
+from .time_window_dock import TimeWindowDock
 
 
 class CredentialDialog(QDialog):
@@ -55,144 +57,6 @@ class CredentialDialog(QDialog):
             return
         self.accept()
 
-
-
-class SettingsDialog(QDialog):
-    def __init__(self, settings: Settings, server: BDEServer, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Server Settings")
-        self.settings = settings
-        self.server = server
-        self.setMinimumWidth(500)
-        layout = QVBoxLayout(self)
-        form = QFormLayout()
-        self.adapters = network_interfaces()
-        self.nic = QComboBox()
-        self.nic.addItem("Alle Adapter / Alle IPv4-Adressen", ("", "0.0.0.0"))
-        for adapter in self.adapters:
-            self.nic.addItem(f"{adapter['name']} — {adapter['ip']}",
-                             (adapter["key"], adapter["ip"]))
-        self.ip = QLineEdit(settings.ip)
-        self.ip.setPlaceholderText("127.0.0.1 oder 0.0.0.0")
-        self.port = QSpinBox()
-        self.port.setRange(1024, 65535)
-        self.port.setValue(settings.port)
-        self.port.setToolTip("Standard-Port 43650")
-        form.addRow("Network Interface (NIC)", self.nic)
-        form.addRow("Listen IP", self.ip)
-        form.addRow("TCP Port", self.port)
-        self.nic.currentIndexChanged.connect(self._nic_changed)
-        for i in range(self.nic.count()):
-            if self.nic.itemData(i) == (settings.nic, settings.ip):
-                self.nic.setCurrentIndex(i)
-                break
-        layout.addLayout(form)
-        layout.addWidget(QLabel(f"Server-ID (dauerhaft): {settings.server_id}"))
-        tls_box = QGroupBox("TLS / SSL Security")
-        tls_form = QFormLayout(tls_box)
-        self.tls_toggle = QCheckBox("Enable TLS (empfohlen, für LAN erforderlich)")
-        self.tls_toggle.setChecked(settings.tls_enabled)
-        self.tls_cert = QLineEdit(settings.tls_certificate)
-        self.tls_key = QLineEdit(settings.tls_private_key)
-        tls_form.addRow(self.tls_toggle)
-        tls_form.addRow("Certificate (.crt)", self.tls_cert)
-        tls_form.addRow("Private Key (.key)", self.tls_key)
-        self.test_certificate_btn = QPushButton("Test Certificate")
-        tls_form.addRow(self.test_certificate_btn)
-        self.test_certificate_btn.clicked.connect(self._test_certificate)
-        layout.addWidget(tls_box)
-        notice = QLabel("TLS schützt Login, JSON-RPC, virtuelle Dateien und .cpy-Module. "
-                        "Ohne TLS ist nur 127.0.0.1 zulässig. TLS-Zertifikat ist Pflicht.")
-        notice.setWordWrap(True)
-        layout.addWidget(notice)
-        buttons = QHBoxLayout()
-        self.save_btn = QPushButton("Save Config")
-        self.test_btn = QPushButton("Test-Config")
-        self.cancel_btn = QPushButton("Cancel")
-        buttons.addWidget(self.save_btn)
-        buttons.addWidget(self.test_btn)
-        buttons.addWidget(self.cancel_btn)
-        layout.addLayout(buttons)
-        self.save_btn.clicked.connect(self._save)
-        self.test_btn.clicked.connect(self._test)
-        self.cancel_btn.clicked.connect(self.reject)
-
-    def _nic_changed(self, index):
-        if index >= 0:
-            self.ip.setText(self.nic.itemData(index)[1])
-
-    def values(self):
-        selected = self.nic.currentData()
-        return replace(self.settings, ip=self.ip.text().strip(), port=self.port.value(),
-                       nic=selected[0] if selected and selected[1] == self.ip.text().strip() else "",
-                       tls_enabled=self.tls_toggle.isChecked(),
-                       tls_certificate=self.tls_cert.text().strip(),
-                       tls_private_key=self.tls_key.text().strip()).validate()
-
-    def _validate_tls(self, settings):
-        if not settings.tls_enabled:
-            return "TLS disabled (local loopback only)"
-        if not QSslSocket.supportsSsl():
-            raise RuntimeError("TLS: Qt5/OpenSSL-Unterstützung fehlt")
-        cert = resolve_certificate_file(settings.tls_certificate, application_dir())
-        key = resolve_certificate_file(settings.tls_private_key, application_dir())
-        alg = validate_server_certificate(cert, key)
-        return f"OK: {alg} certificate and private key verified"
-
-    def _test_certificate(self):
-        try:
-            msg = self._validate_tls(self.values())
-        except (ValueError, OSError, RuntimeError, PermissionError) as exc:
-            QMessageBox.warning(self, "TLS Certificate", str(exc))
-            return
-        QMessageBox.information(self, "TLS Certificate", msg)
-
-    def _save(self):
-        try:
-            settings = self.values()
-            self._validate_tls(settings)
-            save_settings(settings)
-        except (OSError, ValueError) as err:
-            QMessageBox.warning(self, "Save Config", str(err))
-            return
-        self.settings = settings
-        self.accept()
-
-    def _test(self):
-        try:
-            cfg = self.values()
-            self._validate_tls(cfg)
-            if self.server.listener.isListening() and (
-                self.server.bind_ip == cfg.ip and self.server.listener.serverPort() == cfg.port
-            ):
-                QMessageBox.information(self, "Test-Config", "OK: Server lauscht bereits an dieser IP und diesem Port. "
-                                        + ("TLS aktiv." if self.server.tls_enabled else "Nur Loopback ohne TLS."))
-                return
-            addresses = {"127.0.0.1", "0.0.0.0"} | {a["ip"] for a in self.adapters}
-            if cfg.ip not in addresses:
-                raise ValueError("Die IP ist keiner lokalen Netzwerkkarte zugeordnet")
-            found = discover_existing(cfg.server_id, broadcast_targets(self.adapters),
-                                      own_instance=self.server.instance_id if self.server.listener.isListening() else "")
-            if found:
-                raise OSError("Nur ein PythonBDE-Server pro Netzwerk erlaubt: "
-                              f"{found['address']}:{found['port']} (ID {found['id']})")
-            temporary = QTcpServer(self)
-            try:
-                if not temporary.listen(QHostAddress(cfg.ip), cfg.port):
-                    raise OSError("IP and/or Port already in use: " + temporary.errorString())
-            finally:
-                temporary.close()
-            if not self.server.listener.isListening():
-                udp = QUdpSocket(self)
-                try:
-                    if not udp.bind(QHostAddress.AnyIPv4, DISCOVERY_PORT, QUdpSocket.DontShareAddress):
-                        raise OSError("Discovery-Port in Benutzung: " + udp.errorString())
-                finally:
-                    udp.close()
-            QMessageBox.information(self, "Test-Config", "OK: Bind-Test erfolgreich. Server kann lokal starten. "
-                                    "TLS-Konfiguration geprüft; Netzwerk-Discovery ist best-effort.")
-        except (OSError, ValueError) as err:
-            QMessageBox.warning(self, "Test-Config fehlgeschlagen", str(err))
 
 
 class UserEditor(QWidget):
@@ -541,16 +405,11 @@ class UserManagerDock(QDockWidget):
         self.setObjectName("PythonBDEUserManager")
         content = QWidget()
         self.setWidget(content)
+        # Die vier Kontoverwaltungsaktionen gehören in die Dock-Titelleiste,
+        # damit im eigentlichen Dock mehr Höhe für TreeView, Editor und Log bleibt.
+        self._install_title_bar()
         layout = QVBoxLayout(content)
         layout.setContentsMargins(4, 4, 4, 4)
-        actions = QHBoxLayout()
-        for text, callback in (("New User", self.new_user), ("Delete Account", self.delete_user),
-                               ("Unlock", self.unlock_user), ("Refresh", self.refresh)):
-            button = QPushButton(text)
-            button.clicked.connect(callback)
-            actions.addWidget(button)
-        actions.addStretch(1)
-        layout.addLayout(actions)
         splitter = QSplitter(Qt.Horizontal)
         self.tree = QTreeWidget()
         self.tree.setHeaderLabel("Users / Admins")
@@ -599,6 +458,83 @@ class UserManagerDock(QDockWidget):
         self.border_timer.timeout.connect(self.update_account_border)
         self.border_timer.start()
         self.refresh()
+
+    def _install_title_bar(self):
+        """Kompakte Titelleiste mit Kontoaktionen und Dock-Steuerung.
+
+        Ein QDockWidget mit setTitleBarWidget() zeichnet keine nativen
+        Close-/Float-Schaltflächen mehr. Diese werden deshalb ebenfalls
+        bereitgestellt. Die freie Titelfläche überlässt Mausereignisse dem
+        QDockWidget und bleibt zum Verschieben/Andocken nutzbar.
+        """
+        title_bar = QWidget(self)
+        title_bar.setObjectName("PythonBDEUserTitleBar")
+        title_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        row = QHBoxLayout(title_bar)
+        row.setContentsMargins(5, 2, 5, 2)
+        row.setSpacing(4)
+
+        heading = QLabel(self.windowTitle(), title_bar)
+        heading.setObjectName("PythonBDEUserTitleLabel")
+        heading.setStyleSheet("font-weight: 600;")
+        heading.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        row.addWidget(heading, 1)
+
+        self.title_buttons = {}
+        for caption, callback, object_name in (
+            ("New User", self.new_user, "PythonBDETitleNewUser"),
+            ("Delete Account", self.delete_user, "PythonBDETitleDeleteAccount"),
+            ("Unlock", self.unlock_user, "PythonBDETitleUnlock"),
+            ("Refresh", self.refresh, "PythonBDETitleRefresh"),
+        ):
+            button = QToolButton(title_bar)
+            button.setObjectName(object_name)
+            button.setText(caption)
+            button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+            button.setAutoRaise(True)
+            button.setFixedHeight(25)
+            # clicked(bool) darf nicht als 'choose' an refresh() geraten.
+            button.clicked.connect(lambda checked=False, func=callback: func())
+            row.addWidget(button)
+            self.title_buttons[caption] = button
+
+        self.float_button = QToolButton(title_bar)
+        self.float_button.setObjectName("PythonBDEUserTitleFloat")
+        # Qt5 has no QStyle.SP_DockWidgetFloatButton (SE_... is a sub-element,
+        # not a StandardPixmap). Use supported window title icons instead.
+        self.float_button.setIcon(self.style().standardIcon(QStyle.SP_TitleBarMaxButton))
+        self.float_button.setAutoRaise(True)
+        self.float_button.setFixedSize(25, 25)
+        self.float_button.clicked.connect(self._toggle_dock_floating)
+        row.addWidget(self.float_button)
+
+        self.close_button = QToolButton(title_bar)
+        self.close_button.setObjectName("PythonBDEUserTitleClose")
+        self.close_button.setIcon(self.style().standardIcon(QStyle.SP_DockWidgetCloseButton))
+        self.close_button.setToolTip("Close Users / Admins")
+        self.close_button.setAutoRaise(True)
+        self.close_button.setFixedSize(25, 25)
+        self.close_button.clicked.connect(self.close)
+        row.addWidget(self.close_button)
+
+        self.title_bar = title_bar
+        self.setTitleBarWidget(title_bar)
+        self.topLevelChanged.connect(self._sync_dock_title_controls)
+        self.featuresChanged.connect(self._sync_dock_title_controls)
+        self._sync_dock_title_controls()
+
+    def _toggle_dock_floating(self):
+        if self.features() & QDockWidget.DockWidgetFloatable:
+            self.setFloating(not self.isFloating())
+
+    def _sync_dock_title_controls(self, *_):
+        self.float_button.setEnabled(bool(self.features() & QDockWidget.DockWidgetFloatable))
+        self.float_button.setToolTip("Dock Users / Admins" if self.isFloating()
+                                     else "Undock Users / Admins")
+        # Maximize = aus dem Dock lösen; Normal = wieder andocken.
+        icon = QStyle.SP_TitleBarNormalButton if self.isFloating() else QStyle.SP_TitleBarMaxButton
+        self.float_button.setIcon(self.style().standardIcon(icon))
+        self.close_button.setEnabled(bool(self.features() & QDockWidget.DockWidgetClosable))
 
     def update_account_border(self, *_):
         """Rot=Admin, Grün=User, Gelb=gesperrt; Sperre hat Vorrang."""
@@ -1011,6 +947,8 @@ class MainWindow(QMainWindow):
         self.backup_dock = None
         self.aliases_dock = None
         self.blocking_dock = None
+        self.settings_dock = None
+        self.time_window_dock = None
         self.setWindowTitle(f"PythonBDE – BDE Server ({operating_system()})" + self.COPYRIGHT)
         # QMainWindow besitzt bewusst kein centralWidget: der User-Manager
         # soll die *gesamte* freie Fläche füllen. Ein verborgenes Dashboard
@@ -1056,6 +994,7 @@ class MainWindow(QMainWindow):
         self._menu_action(manager_menu, "Users", self.show_users)
         self._menu_action(manager_menu, "Aliases", self.show_aliases)
         self._menu_action(manager_menu, "Backup", self.show_backup)
+        self._menu_action(manager_menu, "Time Window", self.show_time_window)
         block_menu = self.menuBar().addMenu("Block")
         for category, text in ((TYPES[0], 'IP Range Blocking'),
                                (TYPES[1], 'Port Range Blocking'),
@@ -1142,16 +1081,29 @@ class MainWindow(QMainWindow):
         self.action_stop.setEnabled(running)
 
     def show_settings(self):
-        dlg = SettingsDialog(self.settings, self.server, self)
-        if dlg.exec_() == QDialog.Accepted:
-            before = self.settings
-            self.settings = dlg.settings
-            if self.server.listener.isListening() and (before.ip, before.port, before.tls_enabled,
-                    before.tls_certificate, before.tls_private_key) != (self.settings.ip, self.settings.port,
-                    self.settings.tls_enabled, self.settings.tls_certificate, self.settings.tls_private_key):
-                QMessageBox.information(self, "Settings", "Konfiguration gespeichert. Stop/Start des Servers "
-                                        "erforderlich, um IP und Port zu übernehmen.")
-            self.statusBar().showMessage("Serverkonfiguration in pythonbde.ini gespeichert")
+        """Network and CA settings in an exclusive two-panel QDockWidget."""
+        if self.settings_dock is None:
+            self.settings_dock = ServerSettingsDock(self)
+            self.addDockWidget(Qt.TopDockWidgetArea, self.settings_dock)
+            self.settings_dock.hide()
+            self.settings_dock.visibilityChanged.connect(
+                lambda visible: self._restore_after_dock(self.settings_dock, visible))
+        self.settings_dock.refresh()
+        self._show_exclusive_dock(self.settings_dock)
+
+    def show_time_window(self):
+        """Persistent weekly work, maintenance and free-time grid."""
+        if self.time_window_dock is None:
+            try:
+                self.time_window_dock = TimeWindowDock(self)
+            except (OSError, ValueError) as exc:
+                QMessageBox.warning(self, 'Time Window', str(exc))
+                return
+            self.addDockWidget(Qt.TopDockWidgetArea, self.time_window_dock)
+            self.time_window_dock.hide()
+            self.time_window_dock.visibilityChanged.connect(
+                lambda visible: self._restore_after_dock(self.time_window_dock, visible))
+        self._show_exclusive_dock(self.time_window_dock)
 
     def show_status(self):
         # Status ist fest im User-Manager eingebettet; kein zweites Log-Dock.

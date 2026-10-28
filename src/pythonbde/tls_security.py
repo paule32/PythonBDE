@@ -8,6 +8,8 @@ from datetime import datetime, timezone, timedelta
 import ipaddress
 import os
 from pathlib import Path
+
+from .windows_process import hidden_process_kwargs
 import platform
 import re
 import subprocess
@@ -108,7 +110,8 @@ def make_test_certificate(cert_file, key_file, dns_names=('localhost',), ip_addr
             if not account:
                 raise PermissionError('Windows Benutzername für private Schlüssel-ACL nicht ermittelbar')
             result = subprocess.run(['icacls', str(key_file), '/inheritance:r', '/grant:r', f'{account}:F', 'SYSTEM:F'],
-                                    capture_output=True, text=True, timeout=10)
+                                    capture_output=True, text=True, timeout=10,
+                                    **hidden_process_kwargs())
             if result.returncode:
                 raise PermissionError('Windows NTFS-ACL konnte nicht gesetzt werden: ' + result.stderr.strip())
         fd = os.open(str(cert_file), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
@@ -234,7 +237,8 @@ def make_ca_signed_server_certificates(cert_file, key_file, ca_cert_file, ca_key
             raise PermissionError('Windows-Konto fuer NTFS-Key-ACL fehlt')
         result = subprocess.run(['icacls', str(path), '/inheritance:r', '/grant:r',
                                  f'{account}:F', 'SYSTEM:F'],
-                                capture_output=True, text=True, timeout=10)
+                                capture_output=True, text=True, timeout=10,
+                                    **hidden_process_kwargs())
         if result.returncode:
             raise PermissionError('NTFS-Key-ACL fehlgeschlagen: ' + result.stderr.strip())
 
@@ -256,3 +260,51 @@ def make_ca_signed_server_certificates(cert_file, key_file, ca_cert_file, ca_key
         for path in created:
             path.unlink(missing_ok=True)
         raise
+
+
+def validate_certificate_set(ca_cert_file, server_cert_file, server_key_file, ca_key_file=None):
+    """Validate local CA -> server chain, roles, leaf key, optional CA key pair."""
+    from cryptography import x509
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa, ec, padding
+    from cryptography.x509.oid import ExtendedKeyUsageOID
+
+    validate_ca_bundle(ca_cert_file)
+    algorithm = validate_server_certificate(server_cert_file, server_key_file)
+    root = x509.load_pem_x509_certificate(Path(ca_cert_file).read_bytes())
+    server = x509.load_pem_x509_certificate(Path(server_cert_file).read_bytes())
+    if server.issuer != root.subject:
+        raise ValueError('Server certificate was not issued by the configured CA')
+    key = root.public_key()
+    try:
+        if isinstance(key, rsa.RSAPublicKey):
+            key.verify(server.signature, server.tbs_certificate_bytes,
+                       padding.PKCS1v15(), server.signature_hash_algorithm)
+        elif isinstance(key, ec.EllipticCurvePublicKey):
+            key.verify(server.signature, server.tbs_certificate_bytes,
+                       ec.ECDSA(server.signature_hash_algorithm))
+        else:
+            raise ValueError('Unsupported CA public key algorithm')
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError('CA signature verification failed') from exc
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    if not root.not_valid_before_utc <= now <= root.not_valid_after_utc:
+        raise ValueError('CA certificate expired or not yet valid')
+    try:
+        ext = server.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
+        if ExtendedKeyUsageOID.SERVER_AUTH not in ext:
+            raise ValueError('Server certificate lacks Server Authentication EKU')
+    except x509.ExtensionNotFound as exc:
+        raise ValueError('Server certificate lacks ExtendedKeyUsage') from exc
+    if ca_key_file is not None:
+        private = serialization.load_pem_private_key(Path(ca_key_file).read_bytes(), password=None)
+        if private.public_key().public_bytes(serialization.Encoding.DER,
+                                             serialization.PublicFormat.SubjectPublicKeyInfo) != key.public_bytes(
+                serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo):
+            raise ValueError('CA certificate/private key mismatch')
+        if os.name == 'posix' and (Path(ca_key_file).stat().st_mode & 0o077):
+            raise PermissionError('CA private key must have 0600 permissions on Linux')
+    return algorithm

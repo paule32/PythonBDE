@@ -10,7 +10,7 @@ import sys
 import tempfile
 import uuid
 
-from .tls_security import DEFAULT_CERT, DEFAULT_KEY
+from .tls_security import DEFAULT_CERT, DEFAULT_KEY, DEFAULT_CA_CERT
 
 DEFAULT_PORT = 43650
 DISCOVERY_PORT = 43651
@@ -36,6 +36,8 @@ class Settings:
     tls_enabled: bool = True
     tls_certificate: str = DEFAULT_CERT
     tls_private_key: str = DEFAULT_KEY
+    tls_ca_certificate: str = DEFAULT_CA_CERT
+    tls_ca_private_key: str = "certificates/ca.key"
 
     def validate(self):
         try:
@@ -76,6 +78,8 @@ def load_settings(path: Path | None = None) -> Settings:
         tls_enabled=ini.getboolean("TLS", "enabled", fallback=True),
         tls_certificate=ini.get("TLS", "certificate", fallback=DEFAULT_CERT),
         tls_private_key=ini.get("TLS", "private_key", fallback=DEFAULT_KEY),
+        tls_ca_certificate=ini.get("TLS", "ca_certificate", fallback=DEFAULT_CA_CERT),
+        tls_ca_private_key=ini.get("TLS", "ca_private_key", fallback="certificates/ca.key"),
     ).validate()
     # Neue ID beim ersten Start dauerhaft sichern, nie bei normalem Neustart ändern.
     if not path.exists() or not data.get("id"):
@@ -92,7 +96,9 @@ def save_settings(settings: Settings, path: Path | None = None) -> None:
                      "port": str(settings.port), "nic": settings.nic}
     ini["TLS"] = {"enabled": str(settings.tls_enabled).lower(),
                   "certificate": settings.tls_certificate,
-                  "private_key": settings.tls_private_key}
+                  "private_key": settings.tls_private_key,
+                  "ca_certificate": settings.tls_ca_certificate,
+                  "ca_private_key": settings.tls_ca_private_key}
     # Tempdatei in demselben Verzeichnis + atomare Ersetzung.
     fd, tmp = tempfile.mkstemp(prefix=".pythonbde-", suffix=".tmp", dir=str(path.parent))
     try:

@@ -26,6 +26,7 @@ DEFAULT_MENU = [
             {"id": "notepad", "label": "Notepad", "icon": "document"},
             {"id": "wordpad", "label": "WordPad", "icon": "document"},
             {"id": "calculator", "label": "Calculator", "icon": "program"},
+            {"id": "spreadsheet", "label": "PythonBDE Sheets", "icon": "document"},
         ]},
         {"id": "startup", "label": "StartUp", "icon": "folder", "children": [
             {"id": "startup-empty", "label": "(Empty)", "icon": "document", "disabled": True},

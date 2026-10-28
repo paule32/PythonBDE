@@ -24,7 +24,7 @@ from .virtual_fs import VirtualFS, VirtualFileError
 from .tls_transport import TLSTcpServer
 from .tls_security import resolve_certificate_file
 
-MAX_LINE = 64 * 1024
+MAX_LINE = 128 * 1024
 MAX_QUEUE = 128 * 1024
 SESSION_TTL = 60 * 60
 

@@ -2,9 +2,182 @@
 
 ![TLS-Verbindung zwischen RPC Client und BDE Server](img/screen0000.png)
 
-**Version 0.5.9** · eigenständige Erweiterung zu [paule32/PythonBDE](https://github.com/paule32/PythonBDE).
+**Version 0.6.6** · eigenständige Erweiterung zu [paule32/PythonBDE](https://github.com/paule32/PythonBDE).
 Der beim Abruf verfügbare Repository-Text beschreibt das Projekt als „python based BDE server“.
 Die hier enthaltene Implementierung ist ein **neues, separates Grundmodul**; es wurde **nichts nach GitHub gepusht**.
+
+## Neu v0.6.6 – Qt5-Titelleiste und konsolenloser GUI-Start
+
+- **Qt5-Startfehler behoben:** `QStyle.SP_DockWidgetFloatButton` existiert nicht als StandardPixmap in PyQt5. Die Titelleiste des Users/Admins-Docks verwendet jetzt `SP_TitleBarMaxButton` zum Abkoppeln und `SP_TitleBarNormalButton` zum Andocken. Close, New User, Delete Account, Unlock und Refresh bleiben erhalten.
+- **Kein Konsolen-Aufblinken durch den Watchdog:** Die MinGW-Prüfung (`g++ -dumpmachine`) und der automatische C++-Build starten unter Windows mit `CREATE_NO_WINDOW` und versteckter Startkonsole. Auch `icacls` bei der TLS- und Benutzerdateiverwaltung wird ohne sichtbare Konsole ausgeführt.
+- Der Watchdog selbst wird als GUI-EXE gestartet, ohne dessen späteren Win32-EDIT-Fehlerdialog zu verstecken.
+- `server_gui.pyw` und `rpc_client_gui.pyw` verstecken optional eine *nur ihnen gehörende* Konsole bereits vor dem Import der Anwendung. Eine bestehende PowerShell-/CMD-Konsole wird ausdrücklich **nicht** versteckt.
+- Für konsolenlosen Start **`pythonw.exe server_gui.pyw`** bzw. **`pythonw.exe rpc_client_gui.pyw`** benutzen. Bei `python.exe server.py` bleibt die absichtlich geöffnete Konsole erhalten.
+- Fehlerlogs bleiben unter `%LOCALAPPDATA%\PythonBDE\pythonbde_errors.log` verfügbar. Der unabhängige MinGW32-/MinGW64-Watchdog und seine Crash-Anzeige funktionieren weiterhin.
+- Die Qt5-Titelleiste und Win32-Fensterunterdrückung müssen auf Windows nativ geprüft werden.
+
+## Neu v0.6.5 – MinGW32-/MinGW64-Kompilierkorrektur
+
+- `watchdog/pythonbde_watchdog.cpp`: Win32-`RECT` verwendet `LONG`; explizite Umwandlung der Breiten-/Höhendifferenz in `int` vor `std::max()` beseitigt die GCC-16-Compilerfehler in `layout()` (Zeilen 147/148 des bisherigen Standes).
+- Build-Skripte, automatischer Watchdog-Start, Win32-EDIT-Dialog, Logging und vorhandene Dokumentation bleiben erhalten.
+- Hinweis: Die Windows-/MinGW-Kompilierung muss weiterhin auf einem Windows-Rechner mit entsprechendem Compiler geprüft werden.
+
+## Neu v0.6.4 – Externer C++-Crash-Watchdog für MinGW32 und MinGW64
+
+**Windows: Ein harter Absturz aus einer nativen DLL oder C-Erweiterung lässt sich häufig erkennen und dokumentieren, aber normalerweise nicht sicher innerhalb desselben Prozesses reparieren.** Daher überwacht ein eigenständiger Win32-Watchdog den Server oder RPC-Client. Python/Qt5 werden **nicht** vom Watchdog geladen.
+
+![Architektur: PythonBDE, unabhängiger Crash Watchdog und Windows-Traceback-EDIT-Fenster](src/assets/watchdog_architektur.png)
+
+*Architektur-Skizze der Überwachung: Das Startprogramm aktiviert den Wächter als separaten Prozess; er zeigt bei einem unerwarteten Prozessende ein Win32-Fenster. Das „Launcher“-Element zeigt konzeptionell den PythonBDE-Startmechanismus, nicht eine zusätzlich erforderliche Launcher-EXE. Grafik zusätzlich als [SVG](src/assets/watchdog_architektur.svg) enthalten.*
+
+### Automatischer Start bei Server und RPC-Client
+
+`server.py`, `server_gui.pyw`, `rpc_client.py` und `rpc_client_gui.pyw` starten den Watchdog unter Windows über `pythonbde/native_watchdog.py` **vor dem ersten PyQt5-Import**. Je überwachte PID ist nur **ein** Watchdog aktiv (Win32-Mutex); ein separater Server und RPC-Client haben jeweils ihren eigenen Wächter. Die Python-Seite wartet auf ein Win32-Bereitschaftsereignis, das erst nach erfolgreichem Öffnen des überwachten Prozesses signalisiert wird.
+
+Bei 32-Bit-Python wird `watchdog/bin/pythonbde_watchdog_x86.exe`, bei 64-Bit-Python `watchdog/bin/pythonbde_watchdog_x64.exe` benutzt. Ist die EXE nicht vorhanden, versucht PythonBDE sie mit einem **installierten MinGW32-/MinGW64-g++** automatisch aus `watchdog/pythonbde_watchdog.cpp` in `%LOCALAPPDATA%\PythonBDE\watchdog\` zu kompilieren. Ist der Compiler nicht vorhanden oder der Build fehlgeschlagen, startet PythonBDE **ohne** Watchdog weiter und protokolliert die Ursache. Für die Auslieferung an Rechner ohne MinGW müssen die beiden EXE-Dateien zuvor gebaut und in `watchdog/bin/` beigelegt werden.
+
+**Windows-Builds:** Aus der MSYS2-MINGW32- bzw. MINGW64-Umgebung:
+
+```cmd
+watchdog\build_mingw32.bat
+watchdog\build_mingw64.bat
+```
+
+Die Buildskripte müssen jeweils im **passenden Compiler-PATH** laufen. Ausführliche Hinweise: [watchdog/README.md](watchdog/README.md). Der Watchdog selbst verwendet ein natives mehrzeiliges Win32-`EDIT`-Control (schreibgeschützt, mit Scrollbars), dazu **Copy Traceback** und **Close**. Er zeigt den Exit-Code, den letzten Fatal-Trace und einen Auszug des normalen Fehlerlogs. Er öffnet **kein** Qt-Fenster und kann daher nach einem Qt- oder DLL-Absturz weiterlaufen.
+
+### 1. Python `faulthandler`: nativer Traceback soweit verfügbar
+
+Beim Windows-Programmstart aktiviert PythonBDE `faulthandler` mit einer pro PID getrennten Datei:
+
+```text
+%LOCALAPPDATA%\PythonBDE\pythonbde_fatal_<PID>.log
+```
+
+Die Datei bleibt während der Python-Laufzeit offen. Bei geeigneten Python-Versionen wird auch die Ausgabe des nativen C-Stacks aktiviert (`c_stack=True`); bei älteren Versionen erfolgt ein kompatibler Fallback. **Nicht jeder native Absturz liefert noch einen vollständigen C-Stack.** Die bisherige `pythonbde_errors.log` bleibt zusätzlich erhalten.
+
+### 2. Windows Error Reporting (WER): optionale Crash Dumps
+
+Windows kann bei nativen Fehlern einen Dump schreiben, **bevor** der betroffene Prozess vollständig endet. Ein externer Watchdog kann einen Dump nach bereits beendetem Prozess nicht nachträglich zuverlässig erstellen. Windows-Dumps lassen sich z. B. mit WinDbg untersuchen. Zur Einrichtung liegt `watchdog/enable_wer_dumps.ps1` bei. Alternativ als Administrator:
+
+```powershell
+$key = "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\pythonw.exe"
+New-Item -Path $key -Force | Out-Null
+New-ItemProperty -Path $key -Name DumpType -Value 1 -PropertyType DWord -Force
+New-ItemProperty -Path $key -Name DumpCount -Value 10 -PropertyType DWord -Force
+```
+
+Standardpfad: `%LOCALAPPDATA%\CrashDumps`. `DumpType=2` erzeugt größere vollständige Dumps. **Achtung:** Die Regel für `pythonw.exe` betrifft *alle* Anwendungen mit diesem Prozessnamen, nicht nur PythonBDE. Dumps können sensible Daten enthalten und müssen geschützt werden.
+
+### 3. Externer Watchdog: Prozessende ohne Qt/Python erkennen
+
+Der Watchdog hält ein Handle des gestarteten Python-Prozesses, wartet mit `WaitForSingleObject()` und liest bei Beendigung den Exit-Code. Bei einem unerwarteten Prozessende zeigt er das native EDIT-Fenster. Ein Exit-Code `0` bedeutet reguläres Beenden; `1` und `2` werden wegen erwarteter Start-/Login-Abbrüche nur dann angezeigt, wenn das Fatal-Log einen Traceback enthält. Der Wächter unterscheidet damit erwartete Abbrüche von vielen systemseitigen Exception-Codes wie `0xC0000005`.
+
+| Fehlerart | Erkennen / protokollieren | Sicher fortsetzen |
+|---|---|---|
+| Normale Python-Exception | Ja, über bestehende GUI-Fehlerbehandlung | Häufig möglich |
+| Fehler in Qt5-/C-DLL | Häufig durch Fatal-Trace oder Prozessstatus | Normalerweise nein |
+| Access Violation `0xC0000005` | Häufig | Nein |
+| Stack Overflow | Teilweise | Nein |
+| Native Heap-Korruption | Teilweise | Nein |
+| Vollständig hängendes GUI | **Noch nicht** – kein Heartbeat-Watchdog | Meist nur Neustart |
+| `TerminateProcess()` | Prozessende erkennbar, Ursache nicht sicher | Nein |
+| Windows-Absturz / Stromausfall | Nicht zuverlässig live erkennbar | Nein |
+
+**Grenzen:** Fehler im Betriebssystem, ein Systemneustart, fehlende Schreibrechte oder bereits zerstörte Prozessdaten verhindern gegebenenfalls jede Diagnose. Das Win32-Fenster ist eine Fehlermeldung **nach dem Prozessende**. Es gibt in dieser Version **keinen automatischen Neustart** und keinen Schutz vor unbeabsichtigtem Datenverlust. `MiniDumpWriteDump()` wird nicht nachträglich auf einen bereits beendeten Prozess angewendet. Bei normalen Python-Ausnahmen greift weiterhin die Fehleranzeige aus v0.6.3 (Qt5-Dialog → natives Win32-EDIT → `MessageBoxW`).
+
+Zum Testen des normalen Starts kann der Watchdog durch die Umgebungsvariable `PYTHONBDE_DISABLE_WATCHDOG=1` deaktiviert werden. Die native MinGW32-/MinGW64-Ausführung und die Interaktion mit einem tatsächlich abstürzenden Qt5-Prozess sind auf einem Windows-Testsystem zu validieren.
+
+## Neu v0.6.3 – Sichtbare Fehler statt stiller Abstürze unter pythonw.exe
+
+Beim Start von **Server und RPC-Client** wird jetzt bereits **vor dem PyQt5-Import**
+`pythonbde.gui_errors.install_exception_handler()` aktiviert.
+
+- Laufende QApplication: modaler Qt5-Dialog mit scrollbarem, schreibgeschütztem Traceback.
+- Keine QApplication (z.B. `ImportError` beim PyQt5-Import, fehlerhafte Qt-Initialisierung):
+  natives Windows-Fenster (`CreateWindowExW`) mit mehrzeiligem **Win32-EDIT**-Feld,
+  vertikaler/horizontaler Scrollbar und **Copy Traceback** / **Close**.
+- Funktioniert auch unter `pythonw.exe` ohne Konsolenfenster und ohne PyQt5.
+- Falls selbst die native Fenstererzeugung fehlschlägt, erfolgt ein letzter
+  Versuch mit `MessageBoxW`; der komplette Traceback bleibt in der Logdatei.
+- Unter Linux ohne vorhandene Qt-Anwendung erfolgt ein schriftliches Logging
+  und die Ausgabe nach stderr, falls stderr vorhanden ist.
+- Auch uncaught Exceptions aus `threading` und unraisable Exceptions werden behandelt.
+  Normales Beenden per `SystemExit` wird nicht als Fehler angezeigt.
+- Die neuen Startdateien `server_gui.pyw` und `rpc_client_gui.pyw`
+  starten unter Windows direkt konsolenlos, sofern `.pyw` mit `pythonw.exe` verknüpft ist.
+
+**Fehlerlog-Datei:**
+
+- Windows: `%LOCALAPPDATA%\PythonBDE\pythonbde_errors.log`
+- Linux: `~/.local/state/PythonBDE/pythonbde_errors.log` oder unter `$XDG_STATE_HOME`.
+- Bei Problemen mit diesem Pfad: temporäres Verzeichnis (`pythonbde_errors.log`).
+- Bis 5 MiB pro aktiver Logdatei; alte Datei wird als `pythonbde_errors.log.old` gesichert.
+
+Beispiele:
+
+```cmd
+pythonw.exe server.py
+pythonw.exe rpc_client.py
+```
+
+Diese Funktion meldet **unbehandelte Python-Ausnahmen** und erhält stderr-Ausgaben
+in einer Datei. Sie kann Prozessabstürze aus C-Erweiterungen, erzwungenen
+OS-Prozessabbruch oder Stromausfälle nicht zuverlässig abfangen.
+
+## Neu v0.6.2 – Aktionen in der Users-/Admins-Titelleiste
+
+Die Buttons **New User**, **Delete Account**, **Unlock** und **Refresh** befinden
+sich direkt in der Titelleiste des Docks `Manager → Users`. Die alte zusätzliche
+Button-Zeile oberhalb der Benutzer-/Admin-Baumansicht wurde entfernt, wodurch
+mehr vertikaler Platz für die eigentlichen Inhalte zur Verfügung steht.
+Die Titelleiste enthält außerdem die Dock-/Undock- und Schließen-Buttons; normale
+Kontofunktionen sowie der Dark-/Light-Modus bleiben erhalten.
+Bei geringer Fensterbreite kann für die volle Beschriftung eine größere Dockbreite
+nötig sein. Ein nativer Sicht- und Drag-Test mit PyQt5 steht noch aus.
+
+## Neu v0.6.1 – Server Settings und Time Window als Docks
+
+- `Server → Settings` öffnet ein exklusives, über `QSplitter(Qt.Horizontal)`
+  zweigeteiltes Dock, kein modales Settings-Fenster mehr.
+  Links: NIC, IP, Port, Server UUID, TLS-Aktivierung, Save Config und Test-Config.
+  Rechts: `ca.crt`, `ca.key`, `server.crt`, `server.key`, Dateiauswahl,
+  **Save Certificate Paths**, **Test Certificates**, **Generate New Certificates**.
+  Die Zertifikatspfade einschließlich CA werden in `pythonbde.ini` gespeichert.
+- Zertifikatstest prüft Zertifikats-/Schlüsselpaar, CA-Rolle, Gültigkeit,
+  ExtendedKeyUsage und kryptografische Signatur des Serverzertifikats durch die CA.
+  Die private CA-Schlüsseldatei kann nach Erstellung offline aufbewahrt werden.
+- Die Zertifikatserstellung ist **bei laufendem Server gesperrt**; der Admin muss
+  eine neue Server-UUID bestätigen, die nach erfolgreicher Generierung automatisch
+  in `pythonbde.ini` gespeichert wird. Bereits vorhandene Schlüssel/Zertifikate
+  werden niemals überschrieben. **Clients müssen der neuen CA erneut vertrauen**.
+  Der Generator erzeugt eine neue private Test-CA; für produktive PKI eine CA
+  mit eigener Schlüsselverwaltung und Lifecycle verwenden.
+- `Manager → Time Window` öffnet ein exklusives Dock mit 7 Wochentagsbuttons,
+  editierbarem 15-Minuten-Raster (00:00–24:00), drei Reihen Work-Time,
+  Maintaine-Time, Free-Time und einer vierten rein informativen Reihe
+  **Unassigned**. Mit Maus-Ziehen kann man Bereiche setzen oder löschen;
+  jede Zeitposition wird nur einer Kategorie zugeordnet.
+- `time_windows.json` wird atomar neben `users.dbf` gespeichert.
+  **Noch keine automatische Sperr-/Wartungszeit-Durchsetzung beim Login**;
+  die Zeitfenster sind zunächst ausschließlich Konfigurationsdaten.
+- Bestehende Dock-Anzeigen werden beim Öffnen ausgeblendet und beim Schließen
+  wiederhergestellt. Reine Python-Regressionstests und Quellcode-Strukturtests;
+  kein nativer Qt-GUI-Test in dieser Umgebung.
+
+## Neu v0.6.0 – Excel-ähnliche Remote-Tabellenkalkulation
+
+**Start → Programs → Accessories → PythonBDE Sheets** öffnet das neue
+Ed25519-signierte `.cpy`-Modul als MDI-Fenster mit Taskleistenbutton.
+Es besitzt mehrere Arbeitsblätter, Formelleiste, Zellraster, Grundformeln,
+Zellformatierung, AutoSumme, Kopieren/Einfügen, Suchen, Sortierung und
+CSV/TSV/XLSX-Import/Export sowie das native `.pysheet`-Format.
+Dateioperationen erfolgen ausschließlich über das virtuelle Benutzerdateisystem
+und dessen vorhandene TLS-RPC-Verbindung. Siehe **[SPREADSHEET.md](SPREADSHEET.md)**
+für eine Funktionsliste und die klar begrenzte Excel-Kompatibilität.
+
+Die bestehende `module_package`-Transportgrenze wurde für dieses Modul
+von 32 auf 64 KiB (komprimiert) und für JSONL von 64 auf 128 KiB erhöht;
+die Signaturprüfung und die Begrenzung entpackter Inhalte (256 KiB) bleibt aktiv.
 
 ## Neu v0.5.9 – TLS-Vertrauenskette korrigiert
 
@@ -707,7 +880,7 @@ auf einem Rechner mit installiertem Qt5 geprüft werden.
 - Das Hauptmenü heißt ab sofort **Help** statt **Hilfe**. Die bisherigen Einträge **Informations** und **About ...** bleiben erhalten.
 - Über der Docking-Fläche befindet sich nun eine **Appearance-ToolBar** mit genau einem Button. **Mond = aktuell Light-Mode**; ein Klick aktiviert den Dark-Mode und tauscht den Mond gegen die **Sonne** aus. Klick auf die Sonne schaltet wieder in den Light-Mode mit Mondsymbol.
 - Die Umschaltung betrifft die gesamte `QApplication`: Hauptfenster, Docking-Fenster, Menüs, Tabellen, Baumansichten, Eingabefelder, Statusleiste, Log-Editoren und danach geöffnete Dialoge. Als plattformübergreifende Basis dient Qt5 **Fusion** mit eigenen `QPalette`-Farben und einem globalen Qt Style Sheet.
-- Vertikale und horizontale Scrollbars besitzen **navyblauen Hintergrund**, blau abgesetzte Griffe sowie **gelbe Richtungspfeile** in beiden Themes. Die PNG-Ressourcen befinden sich in `pythonbde/assets/` und benötigen kein QtSvg-Plugin.
+- Vertikale und horizontale Scrollbars besitzen **navyblauen Hintergrund**, blau abgesetzte Griffe sowie **gelbe Richtungspfeile** in beiden Themes. Die PNG-Ressourcen befinden sich in `src/assets/` und benötigen kein QtSvg-Plugin.
 - Die Toolbar-Icons für Sonne und Mond entstehen **zur Laufzeit mit `QPainter`** und benötigen keine externen Icon-Pakete. Die roten, grünen und gelben 3-Pixel-Rahmen der Account-Details werden nach dem Theme-Wechsel unmittelbar erneut angewendet.
 - Der Serverbetrieb sowie DBF-, Alias- und Protokollformate bleiben unverändert. **Das Design startet bei jedem Programmstart bewusst im Light-Mode**; eine dauerhafte Speicherung der Theme-Auswahl war nicht angefordert.
 - Teststand: **66 automatisierte Tests unter Linux erfolgreich** (davon 6 neue Theme-/GUI-Strukturtests ohne PyQt5). Ein tatsächlicher visueller PyQt5-Test unter Windows und Linux steht noch aus.

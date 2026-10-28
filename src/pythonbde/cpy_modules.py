@@ -23,13 +23,14 @@ import sys
 import types
 import zipfile
 
-MAX_CPY_BYTES = 32 * 1024
+MAX_CPY_BYTES = 64 * 1024
 # Bytecode is more compressible than source; retain a distinct size limit
 # for uncompressed ZIP members (never trust the compressed size alone).
-MAX_CPY_MEMBER_BYTES = 128 * 1024
-MAX_CPY_EVENT_BYTES = 60 * 1024
+MAX_CPY_MEMBER_BYTES = 256 * 1024
+MAX_CPY_EVENT_BYTES = 110 * 1024
 MODULE_TITLES = {
     'notepad': 'Notepad', 'wordpad': 'WordPad', 'calculator': 'Calculator',
+    'spreadsheet': 'PythonBDE Sheets',
     'msdos': 'MS-DOS Prompt', 'explorer': 'Windows Explorer',
     'control-panel': 'Control Panel', 'printers': 'Printers',
     'find-files': 'Find Files', 'help': 'Help',
@@ -37,6 +38,7 @@ MODULE_TITLES = {
 }
 MODULE_FILES = {key: ('notepad.py' if key == 'notepad' else
                       'calculator.py' if key == 'calculator' else
+                      'spreadsheet.py' if key == 'spreadsheet' else
                       'wordpad.py' if key == 'wordpad' else 'placeholder.py')
                 for key in MODULE_TITLES}
 MODULE_IDS = frozenset(MODULE_FILES)

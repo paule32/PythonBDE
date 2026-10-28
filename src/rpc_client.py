@@ -10,6 +10,14 @@ import argparse
 import json
 import platform
 import sys
+
+from pythonbde.gui_errors import install_exception_handler
+
+# Also catches errors during Qt imports and before QApplication exists.
+install_exception_handler(app_name="PythonBDE RPC Client")
+
+from pythonbde.native_watchdog import start_watchdog
+start_watchdog(app_name="PythonBDE RPC Client")
 import os
 from pathlib import Path
 from collections import deque
@@ -39,8 +47,8 @@ from pythonbde.cpy_modules import verify_and_load, MODULE_IDS
 from pythonbde.remote_workspace import RemoteFiles
 from pythonbde.tls_security import CERT_ENV, validate_ca_bundle
 
-MAX_LINE = 64 * 1024
-MAX_BUFFER = 128 * 1024
+MAX_LINE = 128 * 1024
+MAX_BUFFER = 256 * 1024
 MAX_LOG_LINES = 500
 WINDOW_SIZES = (
     (640, 480), (800, 600), (1024, 768), (1280, 720),
@@ -771,6 +779,9 @@ class CreatedWindow(QWidget):
             # emulated taskbar on a 640x480 desktop.
             sub.resize(min(475, max(340, self.workspace.width()-20)),
                        min(465, max(405, self.workspace.height()-15)))
+        elif module_id == 'spreadsheet':
+            sub.resize(min(1024, max(570, self.workspace.width()-18)),
+                       min(700, max(380, self.workspace.height()-18)))
         elif module_id in ('notepad', 'wordpad'):
             sub.resize(min(700, max(300, self.workspace.width()-36)),
                        min(530, max(240, self.workspace.height()-36)))

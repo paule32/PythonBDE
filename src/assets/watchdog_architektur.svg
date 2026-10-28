@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="660" height="490" viewBox="0 0 330 245" role="img" aria-label="PythonBDE Launcher, Serverprozess, eigenstaendiger Crash Watchdog und natives Win32 Traceback Fenster">
+  <rect width="330" height="245" rx="8" fill="#F5F7FB"/>
+  <rect x="58" y="8" width="214" height="43" rx="7" fill="#275781"/>
+  <text x="165" y="26" font-size="12" font-weight="600" fill="white" text-anchor="middle" font-family="Arial,sans-serif">PythonBDE Launcher</text>
+  <text x="165" y="41" font-size="10" fill="white" text-anchor="middle" font-family="Arial,sans-serif">Eigenständiger Win32-Prozess</text>
+  <path d="M165 51V72" stroke="#4F6479" stroke-width="1.5"/>
+  <path d="M165 72H83V85 M165 72H247V85" stroke="#4F6479" stroke-width="1.5" fill="none"/>
+  <rect x="5" y="85" width="156" height="60" rx="7" fill="#27724F"/>
+  <text x="83" y="102" font-size="11" font-weight="600" fill="white" text-anchor="middle" font-family="Arial,sans-serif">PythonBDE Server</text>
+  <text x="83" y="118" font-size="10" fill="white" text-anchor="middle" font-family="Arial,sans-serif">pythonw.exe</text>
+  <text x="83" y="133" font-size="10" fill="white" text-anchor="middle" font-family="Arial,sans-serif">Qt5 + DLLs</text>
+  <rect x="169" y="85" width="156" height="60" rx="7" fill="#275781"/>
+  <text x="247" y="103" font-size="11" font-weight="600" fill="white" text-anchor="middle" font-family="Arial,sans-serif">Crash Watchdog</text>
+  <text x="247" y="119" font-size="10" fill="white" text-anchor="middle" font-family="Arial,sans-serif">Überwacht Exit-Code</text>
+  <text x="247" y="133" font-size="10" fill="white" text-anchor="middle" font-family="Arial,sans-serif">und Protokolle</text>
+  <path d="M83 145V172H247V145" stroke="#C38E31" stroke-width="1.5" stroke-dasharray="5 3" fill="none"/>
+  <path d="M247 145V177" stroke="#4F6479" stroke-width="1.5"/>
+  <path d="M243 173L247 179L251 173" fill="none" stroke="#4F6479" stroke-width="1.5"/>
+  <rect x="61" y="183" width="208" height="53" rx="7" fill="#A65E2D"/>
+  <text x="165" y="201" font-size="12" font-weight="600" fill="white" text-anchor="middle" font-family="Arial,sans-serif">Windows Traceback-Fenster</text>
+  <text x="165" y="217" font-size="10" fill="white" text-anchor="middle" font-family="Arial,sans-serif">Win32 EDIT + Log + Dump</text>
+  <text x="165" y="229" font-size="9" fill="white" text-anchor="middle" font-family="Arial,sans-serif">Unabhängig von QApplication</text>
+</svg>

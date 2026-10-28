@@ -12,6 +12,8 @@ import re
 import shutil
 import stat
 import subprocess
+
+from .windows_process import hidden_process_kwargs
 import tempfile
 import uuid
 from pathlib import Path
@@ -70,7 +72,7 @@ def _secure_dir(path):
                f'{username}:(OI)(CI)F', 'SYSTEM:(OI)(CI)F']
         result = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, timeout=12,
-                                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+                                **hidden_process_kwargs())
         if result.returncode:
             raise VirtualFileError('Could not secure Windows workspace ACL')
 
