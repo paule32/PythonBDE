@@ -34,7 +34,7 @@ Die hier enthaltene Implementierung ist ein **neues, separates Grundmodul**; es 
 
 `server.py`, `server_gui.pyw`, `rpc_client.py` und `rpc_client_gui.pyw` starten den Watchdog unter Windows über `pythonbde/native_watchdog.py` **vor dem ersten PyQt5-Import**. Je überwachte PID ist nur **ein** Watchdog aktiv (Win32-Mutex); ein separater Server und RPC-Client haben jeweils ihren eigenen Wächter. Die Python-Seite wartet auf ein Win32-Bereitschaftsereignis, das erst nach erfolgreichem Öffnen des überwachten Prozesses signalisiert wird.
 
-Bei 32-Bit-Python wird `watchdog/bin/pythonbde_watchdog_x86.exe`, bei 64-Bit-Python `watchdog/bin/pythonbde_watchdog_x64.exe` benutzt. Ist die EXE nicht vorhanden, versucht PythonBDE sie mit einem **installierten MinGW32-/MinGW64-g++** automatisch aus `watchdog/pythonbde_watchdog.cpp` in `%LOCALAPPDATA%\PythonBDE\watchdog\` zu kompilieren. Ist der Compiler nicht vorhanden oder der Build fehlgeschlagen, startet PythonBDE **ohne** Watchdog weiter und protokolliert die Ursache. Für die Auslieferung an Rechner ohne MinGW müssen die beiden EXE-Dateien zuvor gebaut und in `watchdog/bin/` beigelegt werden.
+Bei 32-Bit-Python wird `src/watchdog/bin/pythonbde_watchdog_x86.exe`, bei 64-Bit-Python `src/watchdog/bin/pythonbde_watchdog_x64.exe` benutzt. Ist die EXE nicht vorhanden, versucht PythonBDE sie mit einem **installierten MinGW32-/MinGW64-g++** automatisch aus `src/watchdog/pythonbde_watchdog.cpp` in `%LOCALAPPDATA%\PythonBDE\watchdog\` zu kompilieren. Ist der Compiler nicht vorhanden oder der Build fehlgeschlagen, startet PythonBDE **ohne** Watchdog weiter und protokolliert die Ursache. Für die Auslieferung an Rechner ohne MinGW müssen die beiden EXE-Dateien zuvor gebaut und in `src/watchdog/bin/` beigelegt werden.
 
 **Windows-Builds:** Aus der MSYS2-MINGW32- bzw. MINGW64-Umgebung:
 
@@ -43,7 +43,7 @@ watchdog\build_mingw32.bat
 watchdog\build_mingw64.bat
 ```
 
-Die Buildskripte müssen jeweils im **passenden Compiler-PATH** laufen. Ausführliche Hinweise: [watchdog/README.md](watchdog/README.md). Der Watchdog selbst verwendet ein natives mehrzeiliges Win32-`EDIT`-Control (schreibgeschützt, mit Scrollbars), dazu **Copy Traceback** und **Close**. Er zeigt den Exit-Code, den letzten Fatal-Trace und einen Auszug des normalen Fehlerlogs. Er öffnet **kein** Qt-Fenster und kann daher nach einem Qt- oder DLL-Absturz weiterlaufen.
+Die Buildskripte müssen jeweils im **passenden Compiler-PATH** laufen. Ausführliche Hinweise: [watchdog/README.md](src/watchdog/README.md). Der Watchdog selbst verwendet ein natives mehrzeiliges Win32-`EDIT`-Control (schreibgeschützt, mit Scrollbars), dazu **Copy Traceback** und **Close**. Er zeigt den Exit-Code, den letzten Fatal-Trace und einen Auszug des normalen Fehlerlogs. Er öffnet **kein** Qt-Fenster und kann daher nach einem Qt- oder DLL-Absturz weiterlaufen.
 
 ### 1. Python `faulthandler`: nativer Traceback soweit verfügbar
 
@@ -57,7 +57,7 @@ Die Datei bleibt während der Python-Laufzeit offen. Bei geeigneten Python-Versi
 
 ### 2. Windows Error Reporting (WER): optionale Crash Dumps
 
-Windows kann bei nativen Fehlern einen Dump schreiben, **bevor** der betroffene Prozess vollständig endet. Ein externer Watchdog kann einen Dump nach bereits beendetem Prozess nicht nachträglich zuverlässig erstellen. Windows-Dumps lassen sich z. B. mit WinDbg untersuchen. Zur Einrichtung liegt `watchdog/enable_wer_dumps.ps1` bei. Alternativ als Administrator:
+Windows kann bei nativen Fehlern einen Dump schreiben, **bevor** der betroffene Prozess vollständig endet. Ein externer Watchdog kann einen Dump nach bereits beendetem Prozess nicht nachträglich zuverlässig erstellen. Windows-Dumps lassen sich z. B. mit WinDbg untersuchen. Zur Einrichtung liegt `src/watchdog/enable_wer_dumps.ps1` bei. Alternativ als Administrator:
 
 ```powershell
 $key = "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\pythonw.exe"
@@ -172,7 +172,7 @@ Es besitzt mehrere Arbeitsblätter, Formelleiste, Zellraster, Grundformeln,
 Zellformatierung, AutoSumme, Kopieren/Einfügen, Suchen, Sortierung und
 CSV/TSV/XLSX-Import/Export sowie das native `.pysheet`-Format.
 Dateioperationen erfolgen ausschließlich über das virtuelle Benutzerdateisystem
-und dessen vorhandene TLS-RPC-Verbindung. Siehe **[SPREADSHEET.md](SPREADSHEET.md)**
+und dessen vorhandene TLS-RPC-Verbindung. Siehe **[SPREADSHEET.md](src/SPREADSHEET.md)**
 für eine Funktionsliste und die klar begrenzte Excel-Kompatibilität.
 
 Die bestehende `module_package`-Transportgrenze wurde für dieses Modul
@@ -192,7 +192,7 @@ automatischen Ueberschreibungen. Siehe `TLS_SETUP.md`.
 ## Neu v0.5.8 – integriertes TLS für den Server und den RPC-Client
 
 **In dieser Version ist der Netzwerktransport standardmäßig TLS-geschützt.**
-Siehe **[TLS_SETUP.md](TLS_SETUP.md)** für die Zertifikatsgenerierung und den
+Siehe **[TLS_SETUP.md](src/TLS_SETUP.md)** für die Zertifikatsgenerierung und den
 Start auf Windows/Linux. Nach erfolgreicher Zertifikatsprüfung läuft die gesamte
 JSON-RPC-Verbindung einschließlich Passwort, RDP-Fenster, Startmenü, `.cpy`-Paketen
 und virtuellen Dateien über QSslSocket. Alte Abschnitte unten beschreiben

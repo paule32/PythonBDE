@@ -1,3 +1,9 @@
+## v0.6.7 (2026-10-28) – Benutzeraktionen links in der Dock-Titelleiste
+
+- `UserManagerDock`: `New User`, `Delete Account`, `Unlock` und `Refresh` unmittelbar links neben dem Titel ausrichten, statt am rechten Rand.
+- Das dehnbare Leerelement steht jetzt zwischen Kontoaktionen und den Dock-Steuerbuttons; `Float/Dock` und `Close` bleiben rechts.
+- Bestehende Buttons, Callbacks, Kontoansicht, Watchdog und konsolenloser Start unverändert.
+
 ## v0.6.6 (2026-10-28) – Qt5-Dock-Korrektur und konsolenloser Start
 
 - `UserManagerDock`: nicht vorhandenes `QStyle.SP_DockWidgetFloatButton` durch unterstützte Qt5-Titelleistensymbole ersetzt, mit Aktualisierung beim Andocken/Abkoppeln.

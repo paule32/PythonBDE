@@ -478,7 +478,9 @@ class UserManagerDock(QDockWidget):
         heading.setObjectName("PythonBDEUserTitleLabel")
         heading.setStyleSheet("font-weight: 600;")
         heading.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        row.addWidget(heading, 1)
+        # Titel und Kontoaktionen gemeinsam links halten. Die freie
+        # Titelleistenbreite liegt rechts davon (vor den Dock-Fensterbuttons).
+        row.addWidget(heading)
 
         self.title_buttons = {}
         for caption, callback, object_name in (
@@ -497,6 +499,10 @@ class UserManagerDock(QDockWidget):
             button.clicked.connect(lambda checked=False, func=callback: func())
             row.addWidget(button)
             self.title_buttons[caption] = button
+
+        # Erst NACH den vier Aktionen dehnen: New User, Delete Account,
+        # Unlock und Refresh bleiben links; Float und Close stehen rechts.
+        row.addStretch(1)
 
         self.float_button = QToolButton(title_bar)
         self.float_button.setObjectName("PythonBDEUserTitleFloat")
